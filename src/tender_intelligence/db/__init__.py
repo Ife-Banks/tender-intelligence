@@ -1,0 +1,1 @@
+"""Database: engine, declarative base, and the confirmed §7 entities (docs/03)."""

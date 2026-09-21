@@ -1,0 +1,1 @@
+"""Core primitives: correlation IDs, error taxonomy, stage results."""

@@ -1,0 +1,23 @@
+# Environments
+.env
+.env.*
+!.env.example
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+
+# Runtime data
+data/
+*.sqlite
+*.db
+
+# Test artifacts
+htmlcov/
+.coverage
+coverage.xml
