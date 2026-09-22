@@ -20,6 +20,7 @@ Implementation specification derived from v1.1. Each file states what is a confi
 | `02-technical-architecture.md` | Headless worker + admin app, pipeline, abstractions, invariants |
 | `03-data-model.md` | Entities, fields, relationships, constraints, indexes, audit/security |
 | `04-pipeline-spec.md` | End-to-end pipeline, failure/retry/idempotency/correlation/alerting |
+| `04a-waho-discovery-notes.md` | WAHO discovery verification record (verified/assumed/unknown), dry-run boundary, task report |
 | `05-source-adapter-spec.md` | Source adapter architecture + WAHO first implementation |
 | `06-document-processing-spec.md` | Fetcher + understanding (PDF/OCR/DOCX/ZIP/tables/multilingual) |
 | `07-ai-verdict-spec.md` | Stage A triage + Stage B verdict, evidence rules, JSON validation, data policy |
@@ -96,19 +97,34 @@ Phase 1 (WAHO → Test Mode email) is split into fine-grained slices: `04-waho-d
 
 ## Local development
 
-Phase 0 requires only a Python 3.12+ environment and PostgreSQL for a full run.
+Phase 0 requires only a Python 3.12+ environment. The default dev database is **SQLite** —
+no Docker or Postgres needed:
 
 ```text
 git clone <repo> && cd tender-intelligence
 uv sync                              # install deps + dev tools into .venv
-cp .env.example .env                 # then fill in TI_MASTER_KEY (see below)
-docker compose up -d                 # start local PostgreSQL 17
-python -m tender_intelligence.crypto generate-key   # prints a TI_MASTER_KEY
-uv run alembic upgrade head          # apply migrations
+uv run python -m tender_intelligence.crypto generate-key   # prints a TI_MASTER_KEY
+cp .env.example .env                 # then set TI_MASTER_KEY (see below)
+uv run alembic upgrade head          # creates ./data/dev.db and applies migrations
 uv run pytest                        # run the test suite (SQLite, offline)
 uv run python -m tender_intelligence.worker         # run the worker bootstrap
 uv run python -m tender_intelligence.admin          # run the admin API on :8000
 ```
+
+`.env.example` documents every supported variable. By default `TI_DATABASE_URL` points at
+SQLite (`sqlite+pysqlite:///./data/dev.db`); delete that file to reset the dev database.
+The database URL comes from `TI_DATABASE_URL` (env var or `.env`) in that order of priority —
+`alembic.ini` intentionally keeps `sqlalchemy.url` empty so the `.env` is honored.
+
+To use a hosted Postgres instead (e.g. Neon), just paste the connection string into
+`TI_DATABASE_URL` — create a project in the Neon web app, "Create database", copy the
+connection string, and add `?sslmode=require`:
+
+```text
+TI_DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST.neon.tech/DB?sslmode=require
+```
+
+Then rerun `uv run alembic upgrade head` against it.
 
 `/health` is the admin API's liveness + database check:
 
@@ -122,4 +138,4 @@ when bootstrap-seeding config from a file.
 
 ## Note
 
-Setup commands for unselected technologies are deliberately omitted (see `docs/12-deployment.md` for the deployment model and proposed-choice labels).
+Setup commands for unselected technologies are deliberately omitted (see `docs/12-deployment.md` for the deployment model and proposed-choice labels). Docker is **not** required for local development — the stack targets SQLite by default (see `docs/12-deployment.md` for the deployment model), with Postgres via Neon/another host as a drop-in via `TI_DATABASE_URL`.

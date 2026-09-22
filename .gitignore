@@ -21,3 +21,5 @@ data/
 htmlcov/
 .coverage
 coverage.xml
+.neon
+node_modules/

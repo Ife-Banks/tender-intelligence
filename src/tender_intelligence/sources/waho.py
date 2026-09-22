@@ -10,9 +10,11 @@ database, deduplicates, or persists anything (prompt 04 §3, §18). ``get_detail
 ``get_attachments`` are out of scope for this prompt and raise explicitly.
 
 Site specifics live in ``parser_config`` (prompt 04 §7, §9), not in business logic. The
-defaults below mirror the structure **verified against the live source** (data.wahooas.org,
-"WAHO Tenders Platform", loader-independent plain-HTML listing); anything not verified is
-reported separately and fails safely via :class:`SourceError` (``parser_mismatch``).
+defaults below encode the structure **established from the project's offline fixtures**
+(``tests/fixtures/sources/waho/``). They are **assumptions, not live-verified facts**:
+confirming them against the live WAHO site (or overriding them via ``parser_config``) is an
+open task — see ``docs/04a-waho-discovery-notes.md`` (prompt 04 §8). Any mismatch fails
+safely via :class:`SourceError` (``parser_mismatch``) rather than returning corrupt data.
 """
 
 from __future__ import annotations
@@ -41,13 +43,14 @@ log = logging.getLogger("tender_intelligence.sources.waho")
 
 SOURCE_TYPE: Final[str] = "paginated_html_list"
 
-#: Verified: card wrapper per listing row (``div.col-md-6`` containing ``div.card``).
+#: ASSUMED from project fixtures, not live-verified (docs/04a-waho-discovery-notes.md):
+#: card wrapper per listing row (``div.col-md-6`` containing ``div.card``).
 DEFAULT_PARSER_CONFIG: Final[dict[str, Any]] = {
     "row_selector": "div.col-md-6",
     "title_selector": "div.card-header h5 a",
-    #: Verified: detail link local path ``/tenders/tenders/{id}/list``.
+    #: ASSUMED from fixtures: detail link local path ``/tenders/tenders/{id}/list``.
     "detail_href_pattern": r"/tenders/tenders/(?P<id>\d+)/list",
-    #: Verified: next-page marker ``<a rel="next">`` on the listing page.
+    #: ASSUMED from fixtures: next-page marker ``<a rel="next">`` on the listing page.
     "next_page_selector": "a[rel=next]",
     "published_date_pattern": (
         r"Start Date:\s*(?P<raw>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?P<tz>UTC|GMT)"
@@ -69,7 +72,7 @@ DEFAULT_PARSER_CONFIG: Final[dict[str, Any]] = {
             r"\s*(?P<tz>[A-Z]{2,4})?"
         ),
     ],
-    #: Verified at collection time; operator may override.
+    #: Technical default; operator may override.
     "max_pages": 15,
     "allow_empty_listing": False,
     "expected_languages": ["en", "fr", "pt"],
