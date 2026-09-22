@@ -1,4 +1,4 @@
-# Prompt 07 — AI Verdict Engine (Stage B)
+# Prompt 14 — AI Verdict Engine (Stage B)
 
 > Paste `prompts/00-master-context.md` first. **This is the most rules-heavy prompt — read `docs/07` fully.**
 

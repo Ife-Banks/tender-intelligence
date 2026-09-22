@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tender_intelligence.notifications.test_mode import TestModePolicy, TEST_PREFIX
+from tender_intelligence.notifications.test_mode import TEST_PREFIX, TestModePolicy
 
 
 class TestTestModePolicy:

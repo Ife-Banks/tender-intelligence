@@ -1,4 +1,4 @@
-# Prompt 09 — Admin API
+# Prompt 15 — Admin API
 
 > Paste `prompts/00-master-context.md` first.
 

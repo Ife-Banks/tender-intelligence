@@ -13,14 +13,14 @@ from tender_intelligence.db.models.config import ConfigChangeLog, Setting
 
 class TestRuntimeConfig:
     def test_defaults_when_no_row(self, db_session):
-        config = load_runtime_config(db_session.connection())
+        config = load_runtime_config(db_session)
         assert isinstance(config, RuntimeConfig)
         assert config.test_mode is True
 
     def test_reads_row_and_mirrors_changes(self, db_session):
         ensure_settings_row(db_session)
         db_session.commit()
-        first = load_runtime_config(db_session.connection())
+        first = load_runtime_config(db_session)
         assert first.test_mode is True
 
         row = db_session.get(Setting, 1)
@@ -28,7 +28,7 @@ class TestRuntimeConfig:
         row.link_expiry_days = 30 if hasattr(row, "link_expiry_days") else None
         db_session.commit()
 
-        second = load_runtime_config(db_session.connection())
+        second = load_runtime_config(db_session)
         assert second.test_mode is False
         assert second.row_version >= first.row_version
 

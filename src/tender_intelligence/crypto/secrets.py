@@ -7,12 +7,20 @@ import os
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from tender_intelligence.core.errors import is_valid_error_code  # noqa: F401  (re-exported for callers)
+from tender_intelligence.core.errors import (
+    is_valid_error_code,  # noqa: F401  (re-exported for callers)
+)
 
 ENVELOPE_PREFIX = "aesgcm:v1:"
 SECRET_ENV_VAR = "TI_MASTER_KEY"
 
-__all__ = ["SecretError", "encrypt_secret", "decrypt_secret", "generate_master_key", "get_master_key"]
+__all__ = [
+    "SecretError",
+    "encrypt_secret",
+    "decrypt_secret",
+    "generate_master_key",
+    "get_master_key",
+]
 
 
 class SecretError(Exception):

@@ -1,4 +1,4 @@
-# Prompt 10 — Admin UI
+# Prompt 16 — Admin UI
 
 > Paste `prompts/00-master-context.md` first.
 
@@ -7,7 +7,7 @@
 - `PROJECT_RULES.md`
 - `docs/09-admin-app-spec.md` (full, the ten screens)
 - `docs/10-security-spec.md`
-- The API contract produced by `prompts/09-admin-api.md` (consume it, don't relitigate it)
+- The API contract produced by `prompts/15-admin-api.md` (consume it, don't relitigate it)
 
 ## Task
 

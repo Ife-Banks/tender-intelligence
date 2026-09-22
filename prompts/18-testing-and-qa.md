@@ -1,4 +1,4 @@
-# Prompt 12 — Testing & QA (Hostile)
+# Prompt 18 — Testing & QA (Hostile)
 
 > Paste `prompts/00-master-context.md` first.
 

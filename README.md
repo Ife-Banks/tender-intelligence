@@ -41,17 +41,25 @@ Paste-ready prompts for an AI coding agent (e.g. Claude Code). Each prompt names
 | `01-architecture.md` | Initial architecture and interfaces |
 | `02-database.md` | Schema, migrations, models, indexes |
 | `03-infrastructure.md` | Config, logging, secrets, scheduling, storage abstraction |
-| `04-waho-source-adapter.md` | WAHO adapter + fixtures |
-| `05-document-processing.md` | Document acquisition + understanding |
-| `06-ai-triage.md` | Stage A triage |
-| `07-ai-verdict-engine.md` | Stage B verdict + formatter |
-| `08-email-notifications.md` | Mail provider chain + notification templates |
-| `09-admin-api.md` | Admin API |
-| `10-admin-ui.md` | Admin UI |
-| `11-security-hardening.md` | Security review + hardening pass |
-| `12-testing-and-qa.md` | Hostile QA / failure testing |
-| `13-deployment.md` | Deployment preparation |
-| `14-code-review.md` | Final review against all specs |
+| `04-waho-discovery.md` | WAHO listing discovery (`list_new_tenders`, pagination, fixtures) |
+| `05-tender-deduplication.md` | New/update detection, seen-tenders, correlation IDs, RunHistory |
+| `06-tender-persistence.md` | Storage layer: tenders, documents, status transitions, auditability |
+| `07-document-discovery.md` | WAHO `get_detail` + `get_attachments` (document enumeration) |
+| `08-document-download.md` | Document fetcher: download, ZIP recurse, checksums, per-doc failures |
+| `09-document-processing.md` | Understanding: PDF/OCR/vision/DOCX/tables/langs + document bundle |
+| `10-pipeline-orchestration.md` | Headless worker run loop, config reload, RunHistory, crash safety |
+| `11-test-mode-email.md` | Mail provider chain, Test Mode routing, templates, idempotency |
+| `12-audit-and-timeline.md` | Correlation timelines, notification/audit logs, alert manager |
+| `13-ai-triage.md` | Stage A triage |
+| `14-ai-verdict-engine.md` | Stage B verdict + formatter |
+| `15-admin-api.md` | Admin API |
+| `16-admin-ui.md` | Admin UI |
+| `17-security-hardening.md` | Security review + hardening pass |
+| `18-testing-and-qa.md` | Hostile QA / failure testing |
+| `19-code-review.md` | Final review against all specs (incl. go-live blockers) |
+
+Deployment is not a separate prompt: go-live preparation is part of the code-review gate
+(`19-code-review.md`, requirement 9 — see `docs/12-deployment.md`).
 
 ## How an AI coding agent should use this repository
 
@@ -66,7 +74,8 @@ Paste-ready prompts for an AI coding agent (e.g. Claude Code). Each prompt names
 
 ```text
 Phase 0  Infrastructure / safety / project foundations
-Phase 1  WAHO → tender discovery → documents → processing → Test Mode email
+Phase 1  WAHO discovery → dedup/persist → documents (discovery → download → processing)
+         → pipeline orchestration → Test Mode email → audit/timeline
 Phase 2  Knowledge Base → AI triage → AI verdict (+ 2nd mail provider, first admin screens)
 Phase 3  Additional source adapters (TenderDetail, All Business Africa, UNGM)
 Phase 4  Admin application / configuration / hardening (go-live)
@@ -81,7 +90,35 @@ Read `docs/13-open-decisions.md`. Every item has a decision statement, why it ma
 
 ## Where to start
 
-Begin with an AI coding agent opening `prompts/00-master-context.md`, then `prompts/01-architecture.md` (Phase 0), then `prompts/03-infrastructure.md` and `prompts/02-database.md`. Phase 0 scaffolding is underway (`pyproject.toml`, `.env.example`, `alembic.ini`); application source code will live under `src/` as slices land.
+Begin with an AI coding agent opening `prompts/00-master-context.md`, then `prompts/01-architecture.md` (Phase 0), then `prompts/03-infrastructure.md` and `prompts/02-database.md`. Phase 0 (foundations) is implemented: dependency/tooling scaffolding, database schema + migrations, encrypted secrets, structured logging with correlation IDs, provider interfaces, the worker startup spine, a minimal admin API with `/health`, and the test suite. Application source code lives under `src/`.
+
+Phase 1 (WAHO → Test Mode email) is split into fine-grained slices: `04-waho-discovery.md`, `05-tender-deduplication.md`, `06-tender-persistence.md`, `07-document-discovery.md`, `08-document-download.md`, `09-document-processing.md`, `10-pipeline-orchestration.md`, `11-test-mode-email.md`, `12-audit-and-timeline.md`. Run them in order; each names its prerequisite prompts in "Read"/"Out of scope".
+
+## Local development
+
+Phase 0 requires only a Python 3.12+ environment and PostgreSQL for a full run.
+
+```text
+git clone <repo> && cd tender-intelligence
+uv sync                              # install deps + dev tools into .venv
+cp .env.example .env                 # then fill in TI_MASTER_KEY (see below)
+docker compose up -d                 # start local PostgreSQL 17
+python -m tender_intelligence.crypto generate-key   # prints a TI_MASTER_KEY
+uv run alembic upgrade head          # apply migrations
+uv run pytest                        # run the test suite (SQLite, offline)
+uv run python -m tender_intelligence.worker         # run the worker bootstrap
+uv run python -m tender_intelligence.admin          # run the admin API on :8000
+```
+
+`/health` is the admin API's liveness + database check:
+
+```text
+curl http://127.0.0.1:8000/health
+```
+
+Without a running Postgres, the test suite is fully offline (SQLite via Alembic in-memory
+migrations), so `uv run pytest` always works. The worker only requires the seed YAML path
+when bootstrap-seeding config from a file.
 
 ## Note
 

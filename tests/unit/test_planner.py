@@ -54,7 +54,14 @@ class TestAttachmentPlanner:
 
     def test_sendlib_free_tier(self):
         plan = AttachmentPlanner(Capabilities(max_attachments=5, max_attachment_mb=1)).plan(
-            [_doc("a.pdf", 0.5), _doc("b.pdf", 0.5), _doc("c.pdf", 0.5), _doc("d.pdf", 0.5), _doc("e.pdf", 0.5), _doc("f.pdf", 0.2)]
+            [
+                _doc("a.pdf", 0.5),
+                _doc("b.pdf", 0.5),
+                _doc("c.pdf", 0.5),
+                _doc("d.pdf", 0.5),
+                _doc("e.pdf", 0.5),
+                _doc("f.pdf", 0.2),
+            ]
         )
         assert len(plan.attach) == 5
         assert len(plan.link_filenames) == 1

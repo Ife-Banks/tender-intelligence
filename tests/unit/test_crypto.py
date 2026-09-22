@@ -28,7 +28,9 @@ class TestSecretRoundTrip:
         """Ciphertext must not contain plaintext even in the envelope string."""
         envelope = encrypt_secret("AKIAIVERYLONGACCESSKEY", key=generate_master_key())
         assert "AKIAIVERYLONGACCESSKEY" not in envelope
-        assert len(envelope.split(":")) == 3
+        payload = envelope[len(ENVELOPE_PREFIX):]
+        # payload is exactly ``nonce_b64:ct_b64`` — one separator, no further colons
+        assert payload.count(":") == 1
 
     def test_wrong_key_fails(self):
         envelope = encrypt_secret("secret", key=generate_master_key())

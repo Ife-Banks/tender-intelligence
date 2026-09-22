@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tender_intelligence.db.base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from tender_intelligence.db.models.tenders import Tender
 
 DOWNLOAD_STATUSES = ("pending", "downloaded", "failed")
 EXTRACTION_STATUSES = ("pending", "extracted", "failed", "skipped")
@@ -41,7 +46,7 @@ class Document(Base, TimestampMixin):
     )
     extraction_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    tender: Mapped["Tender"] = relationship(back_populates="documents")  # noqa: F821
+    tender: Mapped[Tender] = relationship(back_populates="documents")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Document id={self.id} filename={self.filename!r}>"

@@ -1,4 +1,4 @@
-# Prompt 11 — Security Hardening
+# Prompt 17 — Security Hardening
 
 > Paste `prompts/00-master-context.md` first.
 

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tender_intelligence.db.base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from tender_intelligence.db.models.tenders import Tender
 
 
 class Source(Base, TimestampMixin):
@@ -30,7 +33,7 @@ class Source(Base, TimestampMixin):
     expected_languages: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     recipient_scope: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
 
-    tenders: Mapped[list["Tender"]] = relationship(  # noqa: F821
+    tenders: Mapped[list[Tender]] = relationship(
         back_populates="source", passive_deletes=True
     )
 

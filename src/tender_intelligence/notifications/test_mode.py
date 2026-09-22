@@ -13,6 +13,8 @@ class TestModePolicy:
     class stays free of any storage dependency. Test Mode ON is the default in the schema.
     """
 
+    __test__ = False  # not a test class; do not collect
+
     def __init__(self, test_mode: bool) -> None:
         self._enabled = bool(test_mode)
 

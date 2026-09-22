@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Any
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from tender_intelligence.config.settings import get_env_settings
 
 
-def build_engine(database_url: str | None = None, **kwargs) -> Engine:
+def build_engine(database_url: str | None = None, **kwargs: Any) -> Engine:
     """Create a SQLAlchemy engine for the configured database URL.
 
     The production target is PostgreSQL via psycopg (sync); tests inject an in-memory

@@ -12,6 +12,10 @@ dependencies = [
     "cryptography>=42.0",
     "PyYAML>=6.0",
     "python-dotenv>=1.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx2>=0.1",
+    "beautifulsoup4>=4.12",
 ]
 
 [dependency-groups]
@@ -20,6 +24,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.10",
     "types-PyYAML>=6.0",
+    "httpx2>=0.1",
 ]
 
 [build-system]

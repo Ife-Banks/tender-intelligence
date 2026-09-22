@@ -1,11 +1,11 @@
-# Prompt 14 — Code Review Against Specifications
+# Prompt 19 — Code Review Against Specifications
 
 > Paste `prompts/00-master-context.md` first.
 
 ## Read
 
 - `PROJECT_RULES.md` (all)
-- Every doc in `/docs` (00–14) that applies to the code under review.
+- Every doc in `/docs` (00–16) that applies to the code under review.
 - The relevant prompts from `/prompts` that produced the code.
 - `README.md`
 
@@ -20,10 +20,10 @@ Review systematically:
 3. **Data model (`docs/03`):** entities/fields/constraints/indexes match; enums correct; migrations non-destructive; `approved_for_company_docs` default false; Test Mode default ON.
 4. **Adapters & processing (`docs/05`–`docs/07`):** WAHO isolation; document resilience; triage/verdict separation; evidence rules ("no evidence on file", citations); JSON validation + single retry + `verdict_failed`; KB version/provider/model recording; data-policy gate incl. fallback.
 5. **Notifications (`docs/08`):** provider chain, planner, Test Mode routing, snapshots, secure links, attached-vs-linked logging, update/alert templates.
-6. **Admin (`docs/09`, `prompts/09`, `prompts/10`):** ten screens; API write/read split; secret write-only; viewer restrictions.
+6. **Admin (`docs/09`, `prompts/15`, `prompts/16`):** ten screens; API write/read split; secret write-only; viewer restrictions.
 7. **Security (`docs/10`):** every §10.3 invariant; secrets-in-logs grep clean; audit log values safe; signed links.
-8. **Tests (`docs/11`):** coverage of failure scenarios F1–F20; no test was deleted/weakened; QA trace from `prompts/12` is consistent.
-9. **Deployment (`docs/12`):** phase order respected; go-live blockers correctly surfaced; nothing deployed without decisions.
+8. **Tests (`docs/11`):** coverage of failure scenarios F1–F20; no test was deleted/weakened; QA trace from `prompts/18` is consistent.
+9. **Deployment / release gate (`docs/12`):** phase order respected; **go-live blockers correctly surfaced — this is where deployment concerns are reviewed** (the standalone deployment prompt was removed; go-live requirements live in `docs/12` and are verified here). Nothing is released without decisions on the open items.
 10. **Open decisions (`docs/13`):** confirm no code silently hard-coded a business decision; confirm every open decision used a config default + flag instead.
 
 Produce per-area verdicts plus:

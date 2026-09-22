@@ -69,7 +69,7 @@ class TestStageResult:
 
     def test_error_code_only_on_failure(self):
         with pytest.raises(ValueError):
-            StageResult.success("fetch", error_code=SOURCE_UNREACHABLE)
+            StageResult(stage="fetch", status="success", error_code=SOURCE_UNREACHABLE)
 
     def test_partial_and_skipped(self):
         assert StageResult.partial("x").status == "partial"

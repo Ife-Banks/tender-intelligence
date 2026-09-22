@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 
 from tender_intelligence.core.correlation import correlation_context
-from tender_intelligence.logging.structured import JsonFormatter, REDACTED
+from tender_intelligence.logging.structured import REDACTED, JsonFormatter
 
 
 class TestJsonFormatter:
@@ -51,11 +51,17 @@ class TestJsonFormatter:
         assert data["error_code"] == "source_unreachable"
 
     def test_extra_scrubbed(self):
-        record = self._record(extra={"api_key": "SK-123", "safe": "value", "nested": {"token": "t"}})
+        record = self._record(
+            extra={
+                "api_key": "SK-SECRET-123",
+                "safe": "value",
+                "nested": {"token": "TOKEN-SECRET-456"},
+            }
+        )
         line = JsonFormatter().format(record)
         data = json.loads(line)
         assert data["extra"]["api_key"] == REDACTED
         assert data["extra"]["safe"] == "value"
         assert data["extra"]["nested"]["token"] == REDACTED
-        assert "SK-123" not in line
-        assert "t" not in line
+        assert "SK-SECRET-123" not in line
+        assert "TOKEN-SECRET-456" not in line

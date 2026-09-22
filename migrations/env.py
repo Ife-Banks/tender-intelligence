@@ -14,8 +14,8 @@ from alembic import context
 from sqlalchemy import create_engine
 
 from tender_intelligence.config.settings import get_env_settings
-from tender_intelligence.db.base import Base
 from tender_intelligence.db import models  # noqa: F401  (register all tables on Base.metadata)
+from tender_intelligence.db.base import Base
 
 config = context.config
 
@@ -46,6 +46,17 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    connection = config.attributes.get("connection")
+    if connection is not None:
+        context.configure(
+            connection=connection,
+            target_metadata=Base.metadata,
+            compare_type=True,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+        return
+
     connectable = create_engine(get_url())
 
     with connectable.connect() as connection:

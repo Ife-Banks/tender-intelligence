@@ -1,4 +1,4 @@
-# Prompt 06 — AI Triage (Stage A)
+# Prompt 13 — AI Triage (Stage A)
 
 > Paste `prompts/00-master-context.md` first.
 

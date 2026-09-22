@@ -33,7 +33,7 @@ class Setting(Base, TimestampMixin):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     @classmethod
-    def seed_default(cls) -> "Setting":
+    def seed_default(cls) -> Setting:
         """Return a fresh defaults singleton, ensuring the row always exists with id=1."""
         return cls(id=1)
 

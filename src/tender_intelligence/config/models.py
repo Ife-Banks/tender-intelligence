@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from tender_intelligence.core.errors import is_valid_error_code  # noqa: F401
@@ -27,8 +27,8 @@ class RuntimeConfig:
 
     @staticmethod
     def utc_now_iso() -> str:
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now(UTC).isoformat()
 
-    def with_value(self, **changes: Any) -> "RuntimeConfig":
+    def with_value(self, **changes: Any) -> RuntimeConfig:
         """Return a copy applied with ``changes`` (mutations are not allowed on frozen)."""
         return RuntimeConfig(**{**self.__dict__, **changes})  # type: ignore[arg-type]

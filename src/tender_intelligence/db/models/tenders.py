@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -19,6 +19,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tender_intelligence.db.base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from tender_intelligence.db.models.documents import Document
+    from tender_intelligence.db.models.sources import Source
 
 TENDER_STATUSES = ("new", "updated", "processed", "verdict_failed", "awaiting_budget")
 
@@ -51,8 +55,8 @@ class Tender(Base, TimestampMixin):
     correlation_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
     is_update: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    source: Mapped["Source"] = relationship(back_populates="tenders")  # noqa: F821
-    documents: Mapped[list["Document"]] = relationship(  # noqa: F821
+    source: Mapped[Source] = relationship(back_populates="tenders")
+    documents: Mapped[list[Document]] = relationship(
         back_populates="tender", passive_deletes=True
     )
 

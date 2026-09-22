@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import contextvars
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
-
 from typing import Final
 
 _current: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -41,7 +40,6 @@ def correlation_context(correlation_id: str | None = None) -> Iterator[str]:
 
     If none is supplied, a fresh ID is generated. The previous value is restored on exit.
     """
-    previous = _current.get()
     active = correlation_id if correlation_id is not None else new_correlation_id()
     token = _current.set(active)
     try:

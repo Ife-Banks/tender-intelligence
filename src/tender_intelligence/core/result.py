@@ -54,7 +54,7 @@ class StageResult:
         correlation_id: str | None = None,
         message: str | None = None,
         details: dict[str, Any] | None = None,
-    ) -> "StageResult":
+    ) -> StageResult:
         return cls(
             stage=stage,
             status="success",
@@ -71,7 +71,7 @@ class StageResult:
         correlation_id: str | None = None,
         message: str | None = None,
         details: dict[str, Any] | None = None,
-    ) -> "StageResult":
+    ) -> StageResult:
         return cls(
             stage=stage,
             status="failed",
@@ -88,7 +88,7 @@ class StageResult:
         correlation_id: str | None = None,
         message: str | None = None,
         details: dict[str, Any] | None = None,
-    ) -> "StageResult":
+    ) -> StageResult:
         return cls(
             stage=stage,
             status="partial",
@@ -104,7 +104,7 @@ class StageResult:
         correlation_id: str | None = None,
         message: str | None = None,
         details: dict[str, Any] | None = None,
-    ) -> "StageResult":
+    ) -> StageResult:
         return cls(
             stage=stage,
             status="skipped",

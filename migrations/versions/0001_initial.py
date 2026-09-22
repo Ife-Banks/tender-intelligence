@@ -11,10 +11,10 @@ fields are stored as constrained VARCHARs (cross-dialect); values are validated 
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0001_initial"
 down_revision = None
@@ -249,7 +249,9 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["provider_id"], ["mail_providers.id"], ondelete="SET NULL"),
     )
-    op.create_index("ix_notification_attempts_notification_id", "notification_attempts", ["notification_id"])
+    op.create_index(
+        "ix_notification_attempts_notification_id", "notification_attempts", ["notification_id"]
+    )
     op.create_index("ix_notification_attempts_status", "notification_attempts", ["status"])
 
     op.create_table(
@@ -361,7 +363,7 @@ def upgrade() -> None:
         sa.column("created_at", sa.DateTime(timezone=True)),
         sa.column("updated_at", sa.DateTime(timezone=True)),
     )
-    _now = datetime.now(timezone.utc)
+    _now = datetime.now(UTC)
     op.bulk_insert(
         seed_defaults,
         [

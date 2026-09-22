@@ -37,7 +37,9 @@ class TestSeed:
         rec = seed_dev_alert_recipient(db_session, "dev@opex.example")
         db_session.commit()
         assert rec.list_type == "dev_alert" and rec.active
-        log = db_session.scalar(select(ConfigChangeLog).where(ConfigChangeLog.entity == "Recipient"))
+        log = db_session.scalar(
+            select(ConfigChangeLog).where(ConfigChangeLog.entity == "Recipient")
+        )
         assert log is not None
 
     def test_seed_is_noop_when_active_dev_exists(self, db_session):
@@ -112,8 +114,11 @@ class TestRecipientGuard:
         db_session.commit()
         big = RecipientGuard(db_session)
         assert big.active_dev_count() == 2
-        # Manually "remove" one
+        # With two active, removing one is fine...
+        assert not big.refuse_last_dev_removal()
+        # ...but removing the remaining one leaves zero active, which is refused.
         recs = big.dev_recipients()
-        recs[0].active = False
+        for rec in recs:
+            rec.active = False
         db_session.commit()
-        assert not RecipientGuard(db_session).refuse_last_dev_removal()
+        assert RecipientGuard(db_session).refuse_last_dev_removal()

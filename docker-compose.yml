@@ -1,0 +1,22 @@
+# Local development database matching .env.example / alembic.ini defaults.
+# Requires a running Docker daemon; stop with:  docker compose down
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: tender_intelligence_db
+    environment:
+      POSTGRES_USER: tender
+      POSTGRES_PASSWORD: tender
+      POSTGRES_DB: tender_intelligence
+    ports:
+      - "5432:5432"
+    volumes:
+      - tender_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tender -d tender_intelligence"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  tender_pgdata:
