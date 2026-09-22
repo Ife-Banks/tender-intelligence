@@ -36,7 +36,7 @@ class Document(Base, TimestampMixin):
     storage_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     language: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    checksum: Mapped[str | None] = mapped_column(String(64), nullable=False)
+    checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
     extracted_text_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
     download_status: Mapped[str] = mapped_column(
         String(24), nullable=False, default="pending"

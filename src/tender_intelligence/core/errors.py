@@ -32,6 +32,13 @@ DEDUP_MISSING_IDENTITY: Final[str] = "dedup_missing_identity"
 DEDUP_INVALID_STATE: Final[str] = "dedup_invalid_state"
 DEDUP_MALFORMED_CANDIDATE: Final[str] = "dedup_malformed_candidate"
 
+# Persistence layer (prompt 06 §4, §6, §10). The docs/04 §4.3 catalogue is non-exhaustive;
+# these codes let repository failures surface as machine-readable, loggable errors.
+PERSISTENCE_NOT_FOUND: Final[str] = "persistence_not_found"
+PERSISTENCE_CONSTRAINT_VIOLATION: Final[str] = "persistence_constraint_violation"
+PERSISTENCE_INVALID_STATUS_TRANSITION: Final[str] = "persistence_invalid_status_transition"
+PERSISTENCE_TRANSACTION_FAILED: Final[str] = "persistence_transaction_failed"
+
 ERROR_CODES: Final[tuple[str, ...]] = (
     SOURCE_UNREACHABLE,
     PARSER_MISMATCH,
@@ -46,6 +53,10 @@ ERROR_CODES: Final[tuple[str, ...]] = (
     DEDUP_MISSING_IDENTITY,
     DEDUP_INVALID_STATE,
     DEDUP_MALFORMED_CANDIDATE,
+    PERSISTENCE_NOT_FOUND,
+    PERSISTENCE_CONSTRAINT_VIOLATION,
+    PERSISTENCE_INVALID_STATUS_TRANSITION,
+    PERSISTENCE_TRANSACTION_FAILED,
 )
 
 ERROR_CODE_VALUES: Final[frozenset[str]] = frozenset(ERROR_CODES)

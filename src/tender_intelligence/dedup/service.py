@@ -16,9 +16,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -34,8 +32,13 @@ from tender_intelligence.core.errors import (
     DEDUP_TRANSACTION_FAILED,
 )
 from tender_intelligence.db.models.runs import RunHistory
-from tender_intelligence.db.models.sources import Source
 from tender_intelligence.db.models.tenders import Tender
+from tender_intelligence.db.repositories import (
+    PersistenceError,
+    RunHistoryRepository,
+    SourceRepository,
+    TenderRepository,
+)
 from tender_intelligence.dedup.classify import (
     NEW,
     UNCHANGED,
@@ -161,6 +164,12 @@ class DedupService:
         except DedupError:
             self._mark_errored(session, run_row, run_cid)
             raise
+        except PersistenceError as exc:
+            session.rollback()
+            self._mark_errored(session, run_row, run_cid)
+            raise DedupError(
+                exc.message, error_code=exc.error_code, context=exc.context
+            ) from exc
         except (IntegrityError, OperationalError) as exc:
             session.rollback()
             self._mark_errored(session, run_row, run_cid)
@@ -181,24 +190,13 @@ class DedupService:
 
     def _open_run(self, session: Session, source_id: int, run_cid: str) -> RunHistory:
         """Persist a RUNNING row at run start (reconstructable after a crash, docs/04 §4.8)."""
-        source = session.get(Source, source_id)
-        if source is None:
+        if not SourceRepository(session).exists(source_id):
             raise DedupError(
                 f"unknown source_id {source_id}",
                 error_code=DEDUP_INVALID_STATE,
                 context={"source_id": source_id},
             )
-        run_row = RunHistory(
-            source_id=source_id,
-            started_at=datetime.now(UTC),
-            listings_found=0,
-            new_count=0,
-            update_count=0,
-            unchanged_count=0,
-            error_count=0,
-            correlation_id=run_cid,
-        )
-        session.add(run_row)
+        run_row = RunHistoryRepository(session).create(source_id, correlation_id=run_cid)
         session.commit()
         return run_row
 
@@ -210,12 +208,7 @@ class DedupService:
             return
         try:
             session.rollback()
-            run_row.ended_at = datetime.now(UTC)
-            run_row.error_count = (run_row.error_count or 0) + 1
-            failed = list(run_row.failed_correlation_ids or [])
-            if run_cid not in failed:
-                failed.append(run_cid)
-            run_row.failed_correlation_ids = failed
+            RunHistoryRepository(session).mark_errored(run_row, run_cid)
             session.commit()
         except Exception:
             log.exception(
@@ -231,7 +224,13 @@ class DedupService:
         run_row: RunHistory,
     ) -> DedupResult:
         result = self._dedup_classify(session, source_id, listings, run_row)
-        run_row.ended_at = datetime.now(UTC)
+        RunHistoryRepository(session).complete(
+            run_row,
+            listings_found=result.new_count + result.update_count + result.unchanged_count,
+            new_count=result.new_count,
+            update_count=result.update_count,
+            unchanged_count=result.unchanged_count,
+        )
         session.commit()
         return result
 
@@ -289,10 +288,9 @@ class DedupService:
             elif outcome.classification == UPDATE:
                 outcomes.append(outcome)
 
-        run_row.listings_found = len(unique_ids)
-        run_row.new_count = sum(1 for o in outcomes if o.classification == NEW)
-        run_row.update_count = sum(1 for o in outcomes if o.classification == UPDATE)
-        run_row.unchanged_count = len(unique_ids) - run_row.new_count - run_row.update_count
+        new_count = sum(1 for o in outcomes if o.classification == NEW)
+        update_count = sum(1 for o in outcomes if o.classification == UPDATE)
+        unchanged_count = len(unique_ids) - new_count - update_count
 
         return DedupResult(
             run_correlation_id=run_row.correlation_id or "",
@@ -300,9 +298,9 @@ class DedupService:
             run_status=COMPLETED,
             new_listings=tuple(new_listings),
             updates=tuple(o for o in outcomes if o.classification == UPDATE),
-            unchanged_count=run_row.unchanged_count,
-            new_count=run_row.new_count,
-            update_count=run_row.update_count,
+            unchanged_count=unchanged_count,
+            new_count=new_count,
+            update_count=update_count,
             duplicate_count=duplicate_count,
             correlation_map=correlation_map,
         )
@@ -313,12 +311,7 @@ class DedupService:
         ids = [cand.external_id for cand in listings if (cand.external_id or "").strip()]
         if not ids:
             return {}
-        rows = session.scalars(
-            select(Tender).where(
-                Tender.source_id == source_id, Tender.external_id.in_(ids)
-            )
-        ).all()
-        return {t.external_id: t for t in rows}
+        return TenderRepository(session).get_many_by_identity(source_id, ids)
 
     def _classify_one(
         self,
@@ -338,57 +331,36 @@ class DedupService:
     ) -> DedupOutcome:
         """Insert a NEW seen row under a SAVEPOINT; on a unique-race, reclassify (prompt 05 §8)."""
         correlation_id = new_correlation_id()
-        tender = Tender(
-            source_id=source_id,
-            external_id=listing.external_id,
-            url=listing.url,
-            title=listing.title,
-            published_date=listing.published_at,
-            deadline=listing.deadline_at,
-            deadline_timezone=listing.deadline_timezone,
-            raw_metadata=dict(listing.raw_metadata),
-            status="new",
-            first_seen_at=datetime.now(UTC),
-            correlation_id=correlation_id,
-            is_update=False,
-        )
         try:
-            with session.begin_nested():
-                session.add(tender)
-                session.flush()
-        except IntegrityError:
-            # A concurrent run inserted the same (source_id, external_id) first.
-            log.warning(
-                "unique-constraint race resolved for %s; reclassifying",
-                listing.external_id,
-                extra={
-                    "stage": self.STAGE,
-                    "status": "race",
-                    "correlation_id": get_correlation_id(),
-                    "external_id": listing.external_id,
-                },
+            claim = TenderRepository(session).claim_new(
+                source_id, listing, correlation_id
             )
-            existing = session.scalars(
-                select(Tender).where(
-                    Tender.source_id == source_id,
-                    Tender.external_id == listing.external_id,
-                )
-            ).first()
-            if existing is None:
-                raise DedupError(
-                    "unique-constraint race with no winner",
-                    error_code=DEDUP_INVALID_STATE,
-                    context={"external_id": listing.external_id},
-                ) from None
-            return self._maybe_update(session, listing, existing)
-
-        return DedupOutcome(
-            classification=NEW,
-            listing=listing,
-            tender_id=tender.id,
-            correlation_id=correlation_id,
-            material_change=False,
+        except PersistenceError as exc:
+            raise DedupError(
+                "unique-constraint race with no winner",
+                error_code=DEDUP_INVALID_STATE,
+                context={"external_id": listing.external_id},
+            ) from exc
+        if claim.created:
+            return DedupOutcome(
+                classification=NEW,
+                listing=listing,
+                tender_id=claim.tender.id,
+                correlation_id=correlation_id,
+                material_change=False,
+            )
+        # A concurrent run inserted the same (source_id, external_id) first.
+        log.warning(
+            "unique-constraint race resolved for %s; reclassifying",
+            listing.external_id,
+            extra={
+                "stage": self.STAGE,
+                "status": "race",
+                "correlation_id": get_correlation_id(),
+                "external_id": listing.external_id,
+            },
         )
+        return self._maybe_update(session, listing, claim.tender)
 
     def _maybe_update(
         self,
@@ -407,17 +379,7 @@ class DedupService:
             )
 
         # UPDATE: persist the changed listing state (status updated, is_update true).
-        tender.title = listing.title
-        tender.url = listing.url
-        tender.published_date = listing.published_at
-        tender.deadline = listing.deadline_at
-        tender.deadline_timezone = listing.deadline_timezone
-        meta = dict(tender.raw_metadata or {})
-        meta.update(listing.raw_metadata or {})
-        tender.raw_metadata = meta
-        tender.status = "updated"
-        tender.is_update = True
-        session.add(tender)
+        TenderRepository(session).apply_update(tender, listing)
 
         values = comparison.current
         changed_details = {

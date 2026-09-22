@@ -277,6 +277,26 @@ Who should decide: OPEX.
 Impact if unresolved: Email format/link security defaults not finalised.
 ```
 
+## O21. `verdict_failed` tender recovery
+
+```
+Decision: Is a Tender with status `verdict_failed` allowed to re-enter the pipeline (e.g. a later
+addendum/deadline change)? The spec describes the failure itself (v1.1 §5.6, docs/07 §5: invalid output
+after one retry → `verdict_failed`, alert, raw notice still emailed) but defines NO recovery edge.
+Why it matters: With no recovery edge, a material change on a `verdict_failed` Tender is rejected by the
+Prompt-06 status guard, and every subsequent dedup run for that source errors and rolls back the run
+(the affected Tender blocks the whole source until the decision changes or data is amended).
+Current status: DECIDED as a documented default — `verdict_failed` is TERMINAL (chosen by the build team,
+prompt 06; visible to OPEX). Decision recorded per PROJECT_RULES #5/#19; request a change here to
+allow recovery before Prompt 07/10 wiring depends on re-processing.
+Known options: (a) terminal as implemented; (b) allow `verdict_failed → updated` when a material change
+arrives (docs/04 §4.14 treats updates to previously-seen Tenders as distinct events; no spec text
+forbids it); (c) skip re-processing for `verdict_failed` Tenders and count them unchanged.
+Who should decide: OPEX (business) with the build/maintain team.
+Impact if unresolved: Terminal means a `verdict_failed` Tender with a later addendum blocks its source's
+run (loud ERRORED) until an option is chosen. Options (b)/(c) would unblock it.
+```
+
 ---
 
 ## Decision summary tables
@@ -285,7 +305,7 @@ Impact if unresolved: Email format/link security defaults not finalised.
 
 | Who | Decisions |
 |---|---|
-| OPEX (business) | O1, O5, O6, O7, O8, O9, O12, O16, O20 |
+| OPEX (business) | O1, O5, O6, O7, O8, O9, O12, O16, O20, O21 |
 | OPEX (business + IT) | O3, O10, O11 |
 | Build/maintain team (+ OPEX where relevant) | O2, O4, O13, O14, O18 |
 | OPEX (IT) + build team | O17 |
