@@ -259,6 +259,19 @@ def test_missing_deadline_returns_listing() -> None:
     assert listing.published_at is not None
 
 
+def test_date_only_deadline_without_tz_never_naive() -> None:
+    """A date-only deadline with no timezone evidence must not yield a naive timestamp."""
+    adapter = _adapter({LISTING_URL: "listing_deadline_no_tz.html"})
+    candidates = adapter.list_new_tenders()
+    assert len(candidates) == 1
+    listing = candidates[0]
+    assert listing.deadline_at is None
+    assert listing.deadline_timezone is None
+    assert listing.raw_metadata["deadline_raw"].endswith("30 November 2026")
+    assert listing.published_at is not None
+    assert listing.raw_metadata["language"] == "en"
+
+
 def test_timezone_preserved() -> None:
     adapter = _adapter({LISTING_URL: "listing_page_1.html", PAGE2_URL: "listing_empty_page.html"})
     listing = adapter.list_new_tenders()[0]
@@ -399,12 +412,11 @@ def test_request_interval_respected() -> None:
     assert timestamps[1] - timestamps[0] >= 0.2
 
 
-def test_detail_and_attachments_are_stubs() -> None:
+def test_detail_and_attachments_not_implemented_stubs() -> None:
+    """Stubs replaced by prompt 07 implementations (see test_waho_detail.py)."""
     adapter = _adapter({LISTING_URL: "listing_page_1.html", PAGE2_URL: "listing_empty_page.html"})
-    with pytest.raises(NotImplementedError):
-        adapter.get_detail("167")
-    with pytest.raises(NotImplementedError):
-        adapter.get_attachments("167")
+    assert hasattr(adapter, "get_detail")
+    assert hasattr(adapter, "get_attachments")
 
 
 # ---------------------------------------------------------------------------

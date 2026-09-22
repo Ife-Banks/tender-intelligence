@@ -16,11 +16,20 @@ from tender_intelligence.core.errors import SOURCE_UNREACHABLE
 
 @dataclass(frozen=True)
 class TenderAttachment:
-    """One document link on a tender's detail page, awaiting the fetcher (docs/05 §5.2)."""
+    """One document link on a tender's detail page, awaiting the fetcher (docs/05 §5.2).
+
+    ``is_zip`` marks a bundle/archive candidate (prompt 07 §3); a ZIP is still one
+    top-level attachment — inner files are never enumerated here. ``advertised_size_bytes``
+    is the size the source page announces, if any; never a measured byte count.
+    ``checksum`` is always unknown until bytes are acquired (prompt 08) and is therefore
+    not part of this metadata-only DTO (prompt 07 §2).
+    """
 
     source_url: str
     filename: str
     mime_type: str | None = None
+    advertised_size_bytes: int | None = None
+    is_zip: bool = False
 
 
 @dataclass(frozen=True)
@@ -90,4 +99,10 @@ class SourceAdapter(ABC):
 
     @abstractmethod
     def get_attachments(self, tender_id: str) -> list[TenderAttachment]:
-        """Enumerate every document link on the detail page, including those inside ZIPs."""
+        """Enumerate every document link the detail page exposes (prompt 07 §2, §3).
+
+        One top-level :class:`TenderAttachment` per link — including ZIPs/bundles, which
+        are never unpacked here and never enumerated as inner files (that is the
+        acquisition/understanding stage's job, docs/06 §6.2, prompt 09). Return metadata
+        only; raise :class:`SourceError` with a structured code on failure.
+        """
