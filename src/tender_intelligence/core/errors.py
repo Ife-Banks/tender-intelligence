@@ -25,6 +25,13 @@ BUDGET_EXCEEDED: Final[str] = "budget_exceeded"
 EMAIL_SEND_FAILED: Final[str] = "email_send_failed"
 PROVIDER_FAILOVER: Final[str] = "provider_failover"
 
+# Deduplication / pipeline integrity (docs/04 §4.3 catalogue is explicitly non-exhaustive;
+# these codes are required by prompt 05 §13's no-silent-failure handling).
+DEDUP_TRANSACTION_FAILED: Final[str] = "dedup_transaction_failed"
+DEDUP_MISSING_IDENTITY: Final[str] = "dedup_missing_identity"
+DEDUP_INVALID_STATE: Final[str] = "dedup_invalid_state"
+DEDUP_MALFORMED_CANDIDATE: Final[str] = "dedup_malformed_candidate"
+
 ERROR_CODES: Final[tuple[str, ...]] = (
     SOURCE_UNREACHABLE,
     PARSER_MISMATCH,
@@ -35,6 +42,10 @@ ERROR_CODES: Final[tuple[str, ...]] = (
     BUDGET_EXCEEDED,
     EMAIL_SEND_FAILED,
     PROVIDER_FAILOVER,
+    DEDUP_TRANSACTION_FAILED,
+    DEDUP_MISSING_IDENTITY,
+    DEDUP_INVALID_STATE,
+    DEDUP_MALFORMED_CANDIDATE,
 )
 
 ERROR_CODE_VALUES: Final[frozenset[str]] = frozenset(ERROR_CODES)

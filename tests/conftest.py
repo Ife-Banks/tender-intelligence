@@ -13,9 +13,10 @@ import tempfile
 import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+
+from tender_intelligence.db.engine import build_engine
 
 
 def _migrations_dir() -> str:
@@ -25,8 +26,8 @@ def _migrations_dir() -> str:
 
 @pytest.fixture()
 def sqlite_engine():
-    """In-memory SQLite engine (StaticPool) with the 0001 migration applied."""
-    engine = create_engine(
+    """In-memory SQLite engine (StaticPool) with all migrations applied (head)."""
+    engine = build_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,

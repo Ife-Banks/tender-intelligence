@@ -133,6 +133,8 @@
 ### RunHistory
 - **Purpose:** per-source crawl run summary, independent of tender records.
 - **Fields (confirmed):** `id`, `source_id`, `started_at`, `ended_at`, `listings_found`, `new_count`, `error_count`, `failed_correlation_ids[]`.
+- **Fields (extended, migration 0002 — prompt 05 §7):** `update_count`, `unchanged_count`, `correlation_id` (run correlation ID).
+- **Lifecycle:** derived, not stored — `ended_at IS NULL` → RUNNING (or crashed mid-run); `ended_at` set + `error_count = 0` → COMPLETED; `ended_at` set + `error_count > 0` → ERRORED (docs/04 §4.8).
 - **Audit:** answers "when did WAHO's watcher last succeed?" at a glance.
 
 ### Settings
