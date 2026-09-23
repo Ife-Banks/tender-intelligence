@@ -8,7 +8,7 @@ with machine-readable codes from :mod:`tender_intelligence.core.errors`.
 
 from tender_intelligence.db.repositories.base import PersistenceError, Repository
 from tender_intelligence.db.repositories.documents import DocumentRepository
-from tender_intelligence.db.repositories.runs import RunHistoryRepository
+from tender_intelligence.db.repositories.runs import RunCounts, RunHistoryRepository
 from tender_intelligence.db.repositories.sources import SourceRepository
 from tender_intelligence.db.repositories.status import (
     TENDER_TRANSITION_MATRIX,
@@ -23,6 +23,7 @@ __all__ = [
     "DocumentRepository",
     "PersistenceError",
     "Repository",
+    "RunCounts",
     "RunHistoryRepository",
     "SourceRepository",
     "TENDER_TRANSITION_MATRIX",

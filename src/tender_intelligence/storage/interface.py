@@ -37,6 +37,14 @@ class ObjectStorage(ABC):
         """Return the bytes stored under *key*; raise ``KeyError`` when absent."""
 
     @abstractmethod
+    def size_of(self, key: str) -> int:
+        """Return the byte size of the object under *key*; raise ``KeyError`` when absent.
+
+        Metadata-only: implementations must not return content, and callers must treat the
+        value as untrusted input (acquisition reports it without trusting it).
+        """
+
+    @abstractmethod
     def exists(self, key: str) -> bool:
         """Return True when an object exists under *key*."""
 

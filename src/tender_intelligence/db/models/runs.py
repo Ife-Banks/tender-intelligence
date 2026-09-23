@@ -19,6 +19,11 @@ class RunHistory(Base, TimestampMixin):
     bumps ``error_count`` and records the run correlation ID in ``failed_correlation_ids``.
     ``update_count`` / ``unchanged_count`` were added in migration 0002 (prompt 05 §7;
     docs/04 §4.8).
+
+    Prompt 10 §5/§8 added four more columns (migration 0004) so that a run finalised by the
+    orchestrator is reconstructable from this row alone: the stage that failed and its error
+    code, the per-stage status map, and the configuration version the run executed under.
+    Status is still derived, never stored.
     """
 
     __tablename__ = "run_history"
@@ -39,3 +44,8 @@ class RunHistory(Base, TimestampMixin):
     error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_correlation_ids: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     correlation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # Prompt 10 §5, §8 (migration 0004).
+    failed_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stages: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    config_version: Mapped[int | None] = mapped_column(Integer, nullable=True)

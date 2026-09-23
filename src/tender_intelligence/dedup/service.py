@@ -9,6 +9,11 @@ in the same commit that releases downstream work. A crash before that commit lea
 persisted (the candidate is reclassified NEXT on re-run — correct, it was never accepted); a
 crash after the commit means the seen row is durable, so the next run sees UNCHANGED and never
 re-notifies (docs/04 §3, §4.7).
+
+Run-row ownership is the one thing prompt 10 changes about this service, and only additively:
+standalone, dedup creates/completes/error-marks its own ``RunHistory`` row exactly as before;
+under the orchestrator the row spans stages 04–09, so the coordinator creates it and dedup is
+handed ``run_history_id``. See :meth:`DedupService.run`.
 """
 
 from __future__ import annotations
@@ -128,11 +133,33 @@ class DedupService:
         listings: Sequence[TenderListing],
         *,
         run_correlation_id: str | None = None,
+        run_history_id: int | None = None,
+        dry_run: bool = False,
     ) -> DedupResult:
-        """Deduplicate *listings* for *source_id* and return the downstream work set."""
+        """Deduplicate *listings* for *source_id* and return the downstream work set.
+
+        Two optional, backward-compatible modes let the orchestrator (prompt 10) own the run
+        row without dedup losing its classification ownership (prompt 10 §5, §20):
+
+        * *run_history_id* — the orchestrator already opened the row at run start, because
+          that row spans stages 04–09. Dedup then neither creates, completes nor error-marks
+          it; it only writes the counts onto it and reports its still-RUNNING status.
+        * *dry_run* — classify for real, then roll the whole transaction back, so nothing is
+          written: no seen-tender rows, no counts. ``claim_new`` uses a SAVEPOINT, so the
+          discard is total (prompt 10 §14).
+
+        With neither argument the behaviour is exactly as before: dedup creates, completes
+        and error-marks its own row.
+        """
         run_cid = run_correlation_id or get_correlation_id() or new_correlation_id()
         with correlation_context(run_cid):
-            return self._run(source_id, list(listings), run_cid)
+            return self._run(
+                source_id,
+                list(listings),
+                run_cid,
+                run_history_id=run_history_id,
+                dry_run=dry_run,
+            )
 
     # -- internals ---------------------------------------------------------
 
@@ -141,12 +168,19 @@ class DedupService:
         source_id: int,
         listings: list[TenderListing],
         run_cid: str,
+        *,
+        run_history_id: int | None = None,
+        dry_run: bool = False,
     ) -> DedupResult:
+        # Dedup owns the run row only when nobody else handed it one and we are not dry.
+        owns_run = run_history_id is None and not dry_run
         session = self._maker()
         run_row: RunHistory | None = None
         try:
-            run_row = self._open_run(session, source_id, run_cid)
-            result = self._dedup_transaction(session, source_id, listings, run_row)
+            run_row = self._open_run(session, source_id, run_cid, run_history_id, dry_run)
+            result = self._dedup_transaction(
+                session, source_id, listings, run_row, owns_run=owns_run, dry_run=dry_run
+            )
             log.info(
                 "dedup complete: %d new, %d update, %d unchanged, %d duplicate(s)",
                 result.new_count,
@@ -162,17 +196,17 @@ class DedupService:
             )
             return result
         except DedupError:
-            self._mark_errored(session, run_row, run_cid)
+            self._mark_errored(session, run_row, run_cid, owns_run=owns_run)
             raise
         except PersistenceError as exc:
             session.rollback()
-            self._mark_errored(session, run_row, run_cid)
+            self._mark_errored(session, run_row, run_cid, owns_run=owns_run)
             raise DedupError(
                 exc.message, error_code=exc.error_code, context=exc.context
             ) from exc
         except (IntegrityError, OperationalError) as exc:
             session.rollback()
-            self._mark_errored(session, run_row, run_cid)
+            self._mark_errored(session, run_row, run_cid, owns_run=owns_run)
             raise DedupError(
                 f"dedup transaction failed: {exc}",
                 error_code=DEDUP_TRANSACTION_FAILED,
@@ -180,7 +214,7 @@ class DedupService:
             ) from exc
         except Exception as exc:
             session.rollback()
-            self._mark_errored(session, run_row, run_cid)
+            self._mark_errored(session, run_row, run_cid, owns_run=owns_run)
             raise DedupError(
                 f"unexpected dedup failure: {exc}",
                 context={"source_id": source_id, "correlation_id": run_cid},
@@ -188,26 +222,64 @@ class DedupService:
         finally:
             session.close()
 
-    def _open_run(self, session: Session, source_id: int, run_cid: str) -> RunHistory:
-        """Persist a RUNNING row at run start (reconstructable after a crash, docs/04 §4.8)."""
+    def _open_run(
+        self,
+        session: Session,
+        source_id: int,
+        run_cid: str,
+        run_history_id: int | None = None,
+        dry_run: bool = False,
+    ) -> RunHistory:
+        """Resolve the run row dedup will classify against.
+
+        Standalone, dedup creates and commits a RUNNING row at run start (reconstructable
+        after a crash, docs/04 §4.8). Under the orchestrator the row already exists and is
+        only fetched. In dry-run mode a row is flushed for its primary key but never
+        committed — it vanishes with the rollback at the end of the transaction.
+        """
         if not SourceRepository(session).exists(source_id):
             raise DedupError(
                 f"unknown source_id {source_id}",
                 error_code=DEDUP_INVALID_STATE,
                 context={"source_id": source_id},
             )
-        run_row = RunHistoryRepository(session).create(source_id, correlation_id=run_cid)
+        repo = RunHistoryRepository(session)
+        if run_history_id is not None:
+            run_row = repo.get(run_history_id)
+            if run_row is None:
+                raise DedupError(
+                    f"unknown run_history_id {run_history_id}",
+                    error_code=DEDUP_INVALID_STATE,
+                    context={"source_id": source_id, "run_history_id": run_history_id},
+                )
+            return run_row
+        run_row = repo.create(source_id, correlation_id=run_cid)
+        if dry_run:
+            session.flush()
+            return run_row
         session.commit()
         return run_row
 
     def _mark_errored(
-        self, session: Session, run_row: RunHistory | None, run_cid: str
+        self,
+        session: Session,
+        run_row: RunHistory | None,
+        run_cid: str,
+        *,
+        owns_run: bool = True,
     ) -> None:
-        """Persist RUNNING → ERRORED in its own transaction (docs/04 §4.8, §4.3)."""
+        """Persist RUNNING → ERRORED in its own transaction (docs/04 §4.8, §4.3).
+
+        Only when dedup owns the row: under orchestration the run does not end here — a
+        stage-05 failure is finalised by the coordinator, which also has the stage map and
+        the failed-stage attribution (prompt 10 §5).
+        """
         if run_row is None:
             return
         try:
             session.rollback()
+            if not owns_run:
+                return
             RunHistoryRepository(session).mark_errored(run_row, run_cid)
             session.commit()
         except Exception:
@@ -222,15 +294,23 @@ class DedupService:
         source_id: int,
         listings: list[TenderListing],
         run_row: RunHistory,
+        *,
+        owns_run: bool = True,
+        dry_run: bool = False,
     ) -> DedupResult:
-        result = self._dedup_classify(session, source_id, listings, run_row)
-        RunHistoryRepository(session).complete(
-            run_row,
-            listings_found=result.new_count + result.update_count + result.unchanged_count,
-            new_count=result.new_count,
-            update_count=result.update_count,
-            unchanged_count=result.unchanged_count,
-        )
+        result = self._dedup_classify(session, source_id, listings, run_row, owns_run=owns_run)
+        if owns_run:
+            RunHistoryRepository(session).complete(
+                run_row,
+                listings_found=result.new_count + result.update_count + result.unchanged_count,
+                new_count=result.new_count,
+                update_count=result.update_count,
+                unchanged_count=result.unchanged_count,
+            )
+        if dry_run:
+            # Nothing is written: the whole classification — claims included — is discarded.
+            session.rollback()
+            return result
         session.commit()
         return result
 
@@ -240,6 +320,8 @@ class DedupService:
         source_id: int,
         listings: list[TenderListing],
         run_row: RunHistory,
+        *,
+        owns_run: bool = True,
     ) -> DedupResult:
         seen = self._load_seen(session, source_id, listings)
 
@@ -295,7 +377,9 @@ class DedupService:
         return DedupResult(
             run_correlation_id=run_row.correlation_id or "",
             run_history_id=run_row.id,
-            run_status=COMPLETED,
+            # Under orchestration the run is still going: stages 06–09 have not run yet, so
+            # reporting COMPLETED here would be a lie (prompt 10 §8). Derive it honestly.
+            run_status=COMPLETED if owns_run else derive_run_status(run_row),
             new_listings=tuple(new_listings),
             updates=tuple(o for o in outcomes if o.classification == UPDATE),
             unchanged_count=unchanged_count,

@@ -297,15 +297,45 @@ Impact if unresolved: Terminal means a `verdict_failed` Tender with a later adde
 run (loud ERRORED) until an option is chosen. Options (b)/(c) would unblock it.
 ```
 
+## O22. Unsupported-format attachments: does a skip make the inputs "incomplete"?
+
+```
+Decision: When an acquired attachment is in a format the pipeline does not extract (a .xlsx price
+schedule, a .png organogram, a legacy .doc), should the tender be reported as having
+`incomplete_inputs = true` — or only as having a document that was skipped?
+Why it matters: `incomplete_inputs` is not internal bookkeeping. Per docs/04 §4.6 and docs/06 §6.5 it
+drives the email footer that tells the reader the verdict was reached on partial inputs. So this
+choice decides whether OPEX is told "we could not read everything" when a tender carries a
+spreadsheet annex — a business-visible statement about the reliability of the verdict, not an
+implementation detail. The spec settles the clear cases (a failed download or a parse failure is a
+gap; docs/06 §6.5) but does not say which side a *deliberately unprocessed* format falls on.
+Current status: DECIDED as a documented default, flagged for confirmation (prompt 09). Prompt 09 §20
+requires distinguishing "declared format is wrong" (a failure: `parse_failed`) from "format is not
+supported" (a skip: `unsupported_format`), so unsupported documents are recorded as `skipped`,
+retained in `TenderDocumentBundle.skipped_documents`, and do NOT by themselves set
+`incomplete_inputs`. Archive containers (`.zip`, whose members are already separate attachment rows
+per prompt 08) are treated the same way. Request a change here if OPEX wants unreadable annexes to
+mark a tender partial.
+Known options: (a) as implemented — skipped, visible in the bundle, `incomplete_inputs` unaffected;
+(b) unsupported formats set `incomplete_inputs = true` (strict: anything unread is a gap);
+(c) unsupported formats are treated as a per-document failure (`failed` + `unsupported_format`)
+rather than a skip; (d) add extraction for the formats that matter (e.g. XLSX) and shrink the set
+that reaches this decision at all.
+Information required: Which attachment formats actually appear on OPEX's target sources, and how
+often a verdict would have changed had one of them been readable.
+Who should decide: OPEX (business) with the build/maintain team.
+Impact if unresolved: Default (a) is in force. If OPEX would call a spreadsheet annex a material gap,
+the email footer understates how partial the inputs were — and the reverse choice would overstate it
+for every tender carrying a logo or an organogram.
+```
+
 ---
 
 ## Decision summary tables
 
-### By who decides
-
 | Who | Decisions |
 |---|---|
-| OPEX (business) | O1, O5, O6, O7, O8, O9, O12, O16, O20, O21 |
+| OPEX (business) | O1, O5, O6, O7, O8, O9, O12, O16, O20, O21, O22 |
 | OPEX (business + IT) | O3, O10, O11 |
 | Build/maintain team (+ OPEX where relevant) | O2, O4, O13, O14, O18 |
 | OPEX (IT) + build team | O17 |
@@ -319,7 +349,7 @@ run (loud ERRORED) until an option is chosen. Options (b)/(c) would unblock it.
 | Phase 1 (Test Mode) | O3 (authorised sender mailbox) |
 | Phase 2 | O18 (vision/OCR default), O9 (budget value) perhaps O4 (2nd mail provider, Test Mode) |
 | Phase 3 | O8 (TenderDetail), O14 (ToS per source), O13 (providers 2/3 if chain required) |
-| Phase 4 (go-live) | O1, O3, O4, O9, O12, O11, O16, O20, O5/O6/O7 (triage profile) |
+| Phase 4 (go-live) | O1, O3, O4, O9, O12, O11, O16, O20, O22 (partial-input wording), O5/O6/O7 (triage profile) |
 
 ## Open-decision discipline
 

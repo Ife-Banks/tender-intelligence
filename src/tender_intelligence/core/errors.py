@@ -15,6 +15,10 @@ PARSER_MISMATCH: Final[str] = "parser_mismatch"
 # Document handling
 DOCUMENT_DOWNLOAD_FAILED: Final[str] = "document_download_failed"
 OCR_FAILED: Final[str] = "ocr_failed"
+# Required by prompt 09 §16 (a document whose bytes could not be parsed/decoded as its declared
+# format). docs/04 §4.3's catalogue is explicitly non-exhaustive, so this is an addition to it,
+# never a replacement for OCR_FAILED.
+PARSE_FAILED: Final[str] = "parse_failed"
 
 # AI assessment
 AI_CALL_TIMEOUT: Final[str] = "ai_call_timeout"
@@ -39,11 +43,21 @@ PERSISTENCE_CONSTRAINT_VIOLATION: Final[str] = "persistence_constraint_violation
 PERSISTENCE_INVALID_STATUS_TRANSITION: Final[str] = "persistence_invalid_status_transition"
 PERSISTENCE_TRANSACTION_FAILED: Final[str] = "persistence_transaction_failed"
 
+# Pipeline orchestration (prompt 10 §10). docs/04 §4.3's catalogue is non-exhaustive, and §10
+# permits a new code only for a condition that is genuinely orchestration-specific — which is
+# what these three are. Every *stage* failure reuses the owning stage's own code where one
+# exists (`source_unreachable`, `dedup_*`, `persistence_*`, ...); STAGE_FAILED covers only the
+# residual case where a stage raised without a code of its own to carry.
+CONFIGURATION_LOAD_FAILED: Final[str] = "configuration_load_failed"
+SOURCE_NOT_RUNNABLE: Final[str] = "source_not_runnable"
+STAGE_FAILED: Final[str] = "stage_failed"
+
 ERROR_CODES: Final[tuple[str, ...]] = (
     SOURCE_UNREACHABLE,
     PARSER_MISMATCH,
     DOCUMENT_DOWNLOAD_FAILED,
     OCR_FAILED,
+    PARSE_FAILED,
     AI_CALL_TIMEOUT,
     AI_INVALID_OUTPUT,
     BUDGET_EXCEEDED,
@@ -57,6 +71,9 @@ ERROR_CODES: Final[tuple[str, ...]] = (
     PERSISTENCE_CONSTRAINT_VIOLATION,
     PERSISTENCE_INVALID_STATUS_TRANSITION,
     PERSISTENCE_TRANSACTION_FAILED,
+    CONFIGURATION_LOAD_FAILED,
+    SOURCE_NOT_RUNNABLE,
+    STAGE_FAILED,
 )
 
 ERROR_CODE_VALUES: Final[frozenset[str]] = frozenset(ERROR_CODES)

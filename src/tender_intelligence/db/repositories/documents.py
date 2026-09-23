@@ -84,6 +84,17 @@ class DocumentRepository(Repository):
         doc.extraction_error_code = error_code
         return doc
 
+    def set_language(self, document_id: int, language: str | None) -> Document:
+        """Persist the best-guess document language (docs/03 §3.2; prompt 09 §10).
+
+        ``Document.language`` is documented as a best guess and docs/03 enumerates no allowed
+        values for it, so this deliberately does not invent a closed vocabulary to validate
+        against (PROJECT_RULES #4, #6).
+        """
+        doc = self._require(document_id)
+        doc.language = language
+        return doc
+
     def set_checksum(self, document_id: int, checksum: str) -> Document:
         doc = self._require(document_id)
         doc.checksum = checksum

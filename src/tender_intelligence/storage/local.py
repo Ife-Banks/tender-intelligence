@@ -39,6 +39,12 @@ class LocalFileSystemStorage(ObjectStorage):
             raise KeyError(key)
         return dest.read_bytes()
 
+    def size_of(self, key: str) -> int:
+        dest = self._resolve(key)
+        if not dest.is_file():
+            raise KeyError(key)
+        return dest.stat().st_size
+
     def exists(self, key: str) -> bool:
         return self._resolve(key).is_file()
 

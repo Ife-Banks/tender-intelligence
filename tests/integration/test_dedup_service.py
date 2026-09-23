@@ -250,7 +250,9 @@ def test_crash_mid_transaction_leaves_no_seen_state_and_recovers(
         pass
 
     class KillService(DedupService):
-        def _dedup_transaction(self, session, source_id, listings, run_row) -> DedupResult:
+        def _dedup_transaction(
+            self, session, source_id, listings, run_row, **_kwargs
+        ) -> DedupResult:
             # Real classify (INSERTs inside savepoints) but the process dies before commit.
             self._dedup_classify(session, source_id, listings, run_row)
             raise Killed()
@@ -345,7 +347,9 @@ def test_run_history_correlation_and_failure_traceability(
     service = DedupService(session_factory_gr)
 
     class Boom(DedupService):
-        def _dedup_transaction(self, session, source_id, listings, run_row) -> DedupResult:
+        def _dedup_transaction(
+            self, session, source_id, listings, run_row, **_kwargs
+        ) -> DedupResult:
             raise DedupError("boom", error_code=DEDUP_MISSING_IDENTITY, context={"k": "v"})
 
     bomby = Boom(session_factory_gr)

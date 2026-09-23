@@ -31,6 +31,13 @@ class TestLocalStorage:
         with pytest.raises(KeyError):
             store.get("k")
 
+    def test_size_of(self, tmp_storage):
+        store = LocalFileSystemStorage(tmp_storage)
+        store.put("k", b"hello")
+        assert store.size_of("k") == 5
+        with pytest.raises(KeyError):
+            store.size_of("missing")
+
     @pytest.mark.parametrize("bad", ["../escape", "/abs/root", "a/../../.."])
     def test_path_traversal_rejected(self, tmp_storage, bad):
         store = LocalFileSystemStorage(tmp_storage)
