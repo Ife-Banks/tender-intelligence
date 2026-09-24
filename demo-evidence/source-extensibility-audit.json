@@ -1,0 +1,82 @@
+{
+  "status": "EXTENSIBILITY PARTIALLY VERIFIED",
+  "prompt_13": "UNBLOCKED",
+  "sources": {
+    "waho": {
+      "source_type": "paginated_html_list",
+      "config_only": true,
+      "code_change_required": false,
+      "notes": "Current WAHO record is handled by the existing configured adapter."
+    },
+    "tenderdetail": {
+      "source_type": "paginated_html_list",
+      "config_only": false,
+      "code_change_required": true,
+      "notes": "Detail route is reconstructed with a fixed WAHO path; parser compatibility is hypothetical."
+    },
+    "all_business_africa": {
+      "source_type": "filtered_html_not_registered",
+      "config_only": false,
+      "code_change_required": true,
+      "notes": "A literal status=open query can be placed in listing_url only if paginated adapter markup/routes fit; there is no filter model or filtered type."
+    },
+    "ungm": {
+      "source_type": "search_form",
+      "config_only": false,
+      "code_change_required": true,
+      "notes": "No form submission, session/CSRF, or browser adapter capability."
+    },
+    "future_rss": {
+      "source_type": "rss_atom",
+      "config_only": false,
+      "code_change_required": true,
+      "notes": "No RSS/Atom adapter registered."
+    },
+    "future_json_api": {
+      "source_type": "json_api",
+      "config_only": false,
+      "code_change_required": true,
+      "notes": "No JSON API adapter registered."
+    }
+  },
+  "blocking_findings": [
+    "WahoPaginatedAdapter._detail_url hardcodes /tenders/tenders/{id}/list, preventing generic configuration of differing detail routes.",
+    "Default AdapterRegistry registers only paginated_html_list and legacy wahoo, both to the WAHO adapter.",
+    "Per-source crawl policy, headers/auth, source timezone, and typed filters are not represented in SourceSpec/factory inputs.",
+    "Source discovery accepts arbitrary configured URLs and follows redirects without public-address or host restrictions."
+  ],
+  "waho_leakage_findings": [
+    {
+      "file": "src/tender_intelligence/deadline/extractor.py",
+      "symbol": "_parse_iso",
+      "finding": "Timezone-less machine timestamps default to UTC based on a WAHO-specific assumption."
+    },
+    {
+      "file": "src/tender_intelligence/dedup/classify.py",
+      "symbol": "_norm_dt",
+      "finding": "Naive timestamps are treated as UTC with justification tied to WAHO."
+    }
+  ],
+  "tested_components": [
+    "Two different Source rows using paginated_html_list with distinct URLs/selectors through the default AdapterRegistry",
+    "Normalized TenderListing outputs passed to DedupService under independent source IDs",
+    "Existing multi-source worker isolation test",
+    "Existing cross-source duplicate external ID deduplication test",
+    "Full repository test suite execution"
+  ],
+  "untested_components": [
+    "TenderDetail live compatibility and actual detail route",
+    "All Business Africa live compatibility and dynamic filter behavior",
+    "UNGM form/session/CSRF workflow",
+    "RSS/Atom and JSON API adapters",
+    "Full two-source worker run with two production default-registry instances through stage 09",
+    "Admin UI/source CRUD because none exists",
+    "SSRF behavior against private-network targets and redirects"
+  ],
+  "test_results": {
+    "behavioral_proof": "1 passed",
+    "full_suite": "577 passed, 1 failed",
+    "failure": "French deadline parser test fixture input contains replacement characters (d�p�t); no audit or production code change made."
+  },
+  "production_files_changed": []
+}

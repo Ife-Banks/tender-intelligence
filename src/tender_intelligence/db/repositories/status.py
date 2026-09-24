@@ -33,9 +33,10 @@ from tender_intelligence.db.repositories.base import PersistenceError
 # Supported outgoing-target sets per current tender status.
 TENDER_TRANSITION_MATRIX: Final[dict[str, frozenset[str]]] = {
     "new": frozenset(TENDER_STATUSES),
-    "updated": frozenset({"updated", "processed", "verdict_failed", "awaiting_budget"}),
+    "updated": frozenset({"updated", "processed", "verdict_failed", "awaiting_budget", "awaiting_approved_provider"}),
     "processed": frozenset({"processed", "updated"}),
-    "awaiting_budget": frozenset({"awaiting_budget", "updated", "processed"}),
+    "awaiting_budget": frozenset({"awaiting_budget", "updated", "processed", "verdict_failed", "awaiting_approved_provider"}),
+    "awaiting_approved_provider": frozenset({"awaiting_approved_provider", "updated", "processed", "verdict_failed", "awaiting_budget"}),
     "verdict_failed": frozenset({"verdict_failed"}),
 }
 

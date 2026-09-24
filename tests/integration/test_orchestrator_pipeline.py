@@ -24,11 +24,13 @@ from support.pipeline import (
     fixture,
 )
 from support.stubs import StubOcrEngine
+from tender_intelligence.audit.timeline import TimelineService
 from tender_intelligence.core.errors import OCR_FAILED, SOURCE_NOT_RUNNABLE, STAGE_FAILED
 from tender_intelligence.db.models.documents import Document
 from tender_intelligence.db.models.runs import RunHistory
 from tender_intelligence.db.models.sources import Source
 from tender_intelligence.db.models.tenders import Tender
+from tender_intelligence.db.models.triage import TriageResult
 from tender_intelligence.dedup.service import derive_run_status
 from tender_intelligence.orchestrator.retry import RetryPolicy
 from tender_intelligence.orchestrator.stages import StageExecution, StageReport, StageRunner
@@ -110,7 +112,10 @@ def test_full_offline_source_run_walks_04_to_09_and_persists_every_stage(
     # The stage map is the reconstruction §8 requires: all six, in order, all COMPLETED.
     assert run.stages is not None
     assert list(run.stages) == [stage.value for stage in STAGE_ORDER]
-    assert set(run.stages.values()) == {StageStatus.COMPLETED.value}
+    assert all(
+        value == StageStatus.COMPLETED.value for key, value in run.stages.items() if key != "14-verdict"
+    )
+    assert run.stages["14-verdict"] == StageStatus.SKIPPED_NOT_IMPLEMENTED.value
 
     # -- listing tallies ---------------------------------------------------
     assert run.listings_found == 3
@@ -143,6 +148,46 @@ def test_full_offline_source_run_walks_04_to_09_and_persists_every_stage(
     source = _stored_source(harness, source_id)
     assert source.last_run_at is not None, "a finished run stamps the source"
     assert source.last_error is None
+
+
+def test_triage_handoff_only_receives_pass_and_records_run_link(session_factory_gr, tmp_path):
+    calls = []
+    verdict_calls = []
+    harness = build_harness(
+        session_factory_gr,
+        tmp_path,
+        ocr=StubOcrEngine(),
+        coordinator_overrides={"triage_pass_handoff": calls.append, "verdict_handoff": verdict_calls.append},
+    )
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+    with session_factory_gr() as session:
+        from tender_intelligence.db.models.config import Setting
+
+        settings = session.get(Setting, 1)
+        assert settings is not None
+        settings.triage_rules = {"exclude_keywords": ["procurement"]}
+        session.commit()
+
+    report = harness.coordinator.run_source(source_id)
+    assert report.run_history_id is not None
+    with session_factory_gr() as session:
+        rows = list(session.query(TriageResult).order_by(TriageResult.id))
+        assert len(rows) == 3
+        assert all(row.run_id == report.run_history_id for row in rows)
+        assert [row.status for row in rows].count("passed") == 1
+        assert [row.status for row in rows].count("triage_discarded") == 2
+    assert len(calls) == 1
+    assert calls[0].status == "passed"
+    assert calls[0].correlation_id
+    assert len(verdict_calls) == 1
+    assert verdict_calls[0].status == "passed"
+    assert report.stage(StageNumber.VERDICT).status is StageStatus.COMPLETED
+    with session_factory_gr() as session:
+        timeline = TimelineService(session).reconstruct_by_tender(rows[0].tender_id)
+        assert timeline is not None
+        triage_event = next(event for event in timeline.events if event.stage == "triage")
+        assert triage_event.run_id == report.run_history_id
 
 
 def test_run_only_touches_the_configured_source(session_factory_gr, tmp_path) -> None:
@@ -246,7 +291,12 @@ def test_a_run_is_traceable_from_row_to_stage_to_tender_to_document(
     # Row → stages, via the persisted map.
     assert run.stages is not None
     for stage in STAGE_ORDER:
-        assert run.stages[stage.value] == StageStatus.COMPLETED.value
+        expected = (
+            StageStatus.SKIPPED_NOT_IMPLEMENTED.value
+            if stage is StageNumber.VERDICT
+            else StageStatus.COMPLETED.value
+        )
+        assert run.stages[stage.value] == expected
 
     # Report → stages, and every stage carries the run's correlation.
     for outcome in report.stages:
@@ -636,7 +686,8 @@ def test_dry_run_reports_the_plan_and_persists_nothing(session_factory_gr, tmp_p
     assert run is not None
     assert run.status is RunStatus.DRY_RUN
     assert run.run_history_id is None
-    assert len(run.planned_actions) == 3
+    assert len(run.planned_actions) == 4
+    assert run.planned_actions[-1] == "would evaluate configurable Stage A triage rules"
 
     # Nothing business-level was persisted anywhere.
     assert _run_rows(session_factory_gr, source_id) == []

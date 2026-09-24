@@ -23,8 +23,9 @@ from tender_intelligence.db.base import Base, TimestampMixin
 if TYPE_CHECKING:
     from tender_intelligence.db.models.documents import Document
     from tender_intelligence.db.models.sources import Source
+    from tender_intelligence.db.models.deadline import TenderDeadlineResolution
 
-TENDER_STATUSES = ("new", "updated", "processed", "verdict_failed", "awaiting_budget")
+TENDER_STATUSES = ("new", "updated", "processed", "verdict_failed", "awaiting_budget", "awaiting_approved_provider")
 
 
 class Tender(Base, TimestampMixin):
@@ -58,6 +59,14 @@ class Tender(Base, TimestampMixin):
     source: Mapped[Source] = relationship(back_populates="tenders")
     documents: Mapped[list[Document]] = relationship(
         back_populates="tender", passive_deletes=True
+    )
+    # Prompt 12.1 — one-to-one resolution row (migration 0010, separate table)
+    deadline_resolution: Mapped[TenderDeadlineResolution | None] = relationship(
+        "TenderDeadlineResolution",
+        back_populates="tender",
+        uselist=False,
+        passive_deletes=True,
+        lazy="joined",
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

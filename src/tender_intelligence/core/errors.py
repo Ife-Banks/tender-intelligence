@@ -25,9 +25,28 @@ AI_CALL_TIMEOUT: Final[str] = "ai_call_timeout"
 AI_INVALID_OUTPUT: Final[str] = "ai_invalid_output"
 BUDGET_EXCEEDED: Final[str] = "budget_exceeded"
 
-# Notification
+# Notification (docs/04 §4.3's catalogue is explicitly non-exhaustive; prompt 11 §7 requires
+# the delivery layer to distinguish retryable (transient) from permanent provider failures
+# with machine-readable codes, so the low-level codes below are additions to it).
 EMAIL_SEND_FAILED: Final[str] = "email_send_failed"
 PROVIDER_FAILOVER: Final[str] = "provider_failover"
+# Transient classes (bounded retry, then failover — docs/08 §8.3).
+MAIL_TIMEOUT: Final[str] = "mail_timeout"
+MAIL_RATE_LIMITED: Final[str] = "mail_rate_limited"
+MAIL_HTTP_5XX: Final[str] = "mail_http_5xx"
+# Permanent classes (fail over without retry — docs/08 §8.3).
+MAIL_INVALID_CREDENTIALS: Final[str] = "mail_invalid_credentials"
+MAIL_INVALID_RECIPIENT: Final[str] = "mail_invalid_recipient"
+MAIL_CONFIGURATION_ERROR: Final[str] = "mail_configuration_error"
+MAIL_UNSUPPORTED_REQUEST: Final[str] = "mail_unsupported_request"
+MAIL_QUOTA_EXHAUSTED: Final[str] = "mail_quota_exhausted"
+# Notification-layer lifecycle.
+MAIL_BREAKER_OPEN: Final[str] = "mail_breaker_open"
+MAIL_ALL_PROVIDERS_FAILED: Final[str] = "mail_all_providers_failed"
+MAIL_LOCAL_RATE_LIMIT: Final[str] = "mail_local_rate_limit"
+NOTIFICATION_NO_VERDICT: Final[str] = "notification_no_verdict"
+NOTIFICATION_INVALID_VERDICT: Final[str] = "notification_invalid_verdict"
+NOTIFICATION_ROUTING_FAILED: Final[str] = "notification_routing_failed"
 
 # Deduplication / pipeline integrity (docs/04 §4.3 catalogue is explicitly non-exhaustive;
 # these codes are required by prompt 05 §13's no-silent-failure handling).
@@ -63,6 +82,20 @@ ERROR_CODES: Final[tuple[str, ...]] = (
     BUDGET_EXCEEDED,
     EMAIL_SEND_FAILED,
     PROVIDER_FAILOVER,
+    MAIL_TIMEOUT,
+    MAIL_RATE_LIMITED,
+    MAIL_HTTP_5XX,
+    MAIL_INVALID_CREDENTIALS,
+    MAIL_INVALID_RECIPIENT,
+    MAIL_CONFIGURATION_ERROR,
+    MAIL_UNSUPPORTED_REQUEST,
+    MAIL_QUOTA_EXHAUSTED,
+    MAIL_BREAKER_OPEN,
+    MAIL_ALL_PROVIDERS_FAILED,
+    MAIL_LOCAL_RATE_LIMIT,
+    NOTIFICATION_NO_VERDICT,
+    NOTIFICATION_INVALID_VERDICT,
+    NOTIFICATION_ROUTING_FAILED,
     DEDUP_TRANSACTION_FAILED,
     DEDUP_MISSING_IDENTITY,
     DEDUP_INVALID_STATE,

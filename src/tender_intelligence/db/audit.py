@@ -1,9 +1,4 @@
-""":mod:`tender_intelligence.db.audit` — configuration-change audit trail (docs/03 §3.2).
-
-ConfigChangeLog must NEVER store secret values (docs/10 security-spec). This helper scrubs
-known secret-like keys before writing, so a buggy caller cannot leak a key into the audit
-trail by accident.
-"""
+"""Configuration-change audit trail with recursive secret redaction (docs/10 §10.1)."""
 
 from __future__ import annotations
 
@@ -26,17 +21,36 @@ _SECRET_KEYS = frozenset(
         "credential",
         "credentials",
         "private_key",
+        "access_token",
+        "refresh_token",
     }
 )
 _REDACTED = "[REDACTED]"
 
 
-def _scrub_changes(changed: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not changed:
-        return changed
-    return {
-        k: (_REDACTED if k.lower() in _SECRET_KEYS else v) for k, v in changed.items()
-    }
+def _is_secret_key(key: object) -> bool:
+    if not isinstance(key, str):
+        return False
+    normalized = key.lower().replace("-", "_")
+    return normalized in _SECRET_KEYS or any(
+        normalized.endswith(f"_{name}") or normalized.startswith(f"{name}_")
+        for name in _SECRET_KEYS
+    )
+
+
+def _scrub_changes(changed: Any) -> Any:
+    """Recursively copy *changed*, replacing secret-bearing values with a marker."""
+
+    if isinstance(changed, dict):
+        return {
+            key: (_REDACTED if _is_secret_key(key) else _scrub_changes(value))
+            for key, value in changed.items()
+        }
+    if isinstance(changed, list):
+        return [_scrub_changes(value) for value in changed]
+    if isinstance(changed, tuple):
+        return tuple(_scrub_changes(value) for value in changed)
+    return changed
 
 
 def log_config_change(
@@ -47,7 +61,8 @@ def log_config_change(
     entity_id: int | None = None,
     changed_fields: dict[str, Any] | None = None,
 ) -> ConfigChangeLog:
-    """Record a configuration change with secret-bearing fields redacted."""
+    """Record a configuration change without ever copying a secret value."""
+
     entry = ConfigChangeLog(
         actor=actor,
         entity=entity,
@@ -57,3 +72,6 @@ def log_config_change(
     session.add(entry)
     session.flush()
     return entry
+
+
+__all__ = ["log_config_change"]

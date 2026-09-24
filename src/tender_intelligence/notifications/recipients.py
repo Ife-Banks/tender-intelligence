@@ -21,9 +21,9 @@ class RecipientGuard:
     def active_dev_count(self) -> int:
         return len(
             self.session.scalars(
-                select(Recipient).where(
-                    Recipient.list_type == "dev_alert", Recipient.active.is_(True)
-                )
+                select(Recipient)
+                .where(Recipient.list_type == "dev_alert", Recipient.active.is_(True))
+                .with_for_update()
             ).all()
         )
 

@@ -65,3 +65,30 @@ Cross-stage additive change: `migrations/versions/0004_run_history_stage_state.p
 
 ## Open Items (housekeeping)
 - O18 (Vision vs OCR default) and O22 (unsupported-format default) remain open decisions from the Prompt 09 pass.
+
+## Prompt 11 Implementation
+
+Prompt 11 added the Test-Mode-safe notification layer without changing the 04→09 pipeline:
+
+- `src/tender_intelligence/mail/`: provider-neutral `MailProvider`, Sendlib adapter, registry,
+  capability planner, retry/failover chain, persisted circuit breaker, signed links, and
+  deterministic templates.
+- `src/tender_intelligence/notifications/`: recipient/Test Mode routing, durable notification
+  service/outbox, update-event seam, red-banner fallback, recipient/provider/settings safety
+  services, and signed archive access.
+- Migrations `0005`–`0009`: notification correlation/dedupe, breaker failure persistence,
+  outbox lifecycle/lease fields, provider-name attempt snapshots, and durable provider usage
+  counters.
+- `docs/11-email-notification-report.md`: architecture, safety evidence, limitations, and
+  open decisions.
+
+Test Mode remains ON by default. While ON, the service routes only to configured development
+recipients, applies `[TEST]`, reserves a durable outbox row before provider I/O, re-checks the
+mode before every send/retry, and records every attempt. Sendlib is the only concrete adapter;
+providers 2/3 remain TBD. No AI, real provider endpoint, business delivery, or go-live switch
+was exercised.
+
+Final Prompt 11 verification on 2026-09-24: **469 passed, 1 warning in 158.97s**; Ruff and
+mypy are clean; migration tests pass; Alembic is at `0009_provider_usage (head)`. The required
+files `implementation/00-current-state.md`, `implementation/01-decisions.md`, and
+`implementation/02-known-issues.md` were not present in the repository and were not recreated.

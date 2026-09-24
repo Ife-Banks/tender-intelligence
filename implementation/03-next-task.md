@@ -20,9 +20,17 @@ Prompt 10 verified a single integrated 04→09 path with real offline evidence:
 
 ## Current Status
 - **Prompt 10 gate**: `PROMPT 10: VERIFIED — READY FOR PROMPT 11`
-- **Next task**: Prompt 11 — test-mode email (do not start Prompt 12+).
+- **Prompt 11 implementation**: notification layer, Test Mode routing, Sendlib adapter,
+  provider chain/breaker, signed-link planner, templates, durable outbox, and safety tests are
+  implemented in the working tree. See `docs/11-email-notification-report.md`.
+- **Prompt 11 verification**: `uv run pytest` reports **469 passed** (one pre-existing
+  Starlette/AnyIO deprecation warning); Ruff and mypy are clean, and Alembic is at
+  `0009_provider_usage (head)`.
+- **Safety boundary**: Test Mode remains ON by default; no real provider or business-recipient
+  delivery was exercised.
+- **Next task**: Prompt 12 remains untouched; do not start it automatically.
 
-## Gate Verdict (target)
+## Gate Verdict
 ```
 PROMPT 11: VERIFIED — READY FOR NEXT PROMPT
 ```

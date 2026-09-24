@@ -10,9 +10,11 @@ from tender_intelligence.mail.message import EmailMessage
 
 @dataclass(frozen=True)
 class Capabilities:
-    """Provider attachment/message limits (docs/03 MailProvider.capabilities).
+    """Provider capability limits from v1.1 §5.10.2 / docs/08 §8.2.
 
-    ``None`` on any field means "no explicit limit" (planner treats it as unbounded).
+    ``None`` means that the provider has not declared a limit.  The planner treats it as
+    unbounded, while a value of zero is rejected: a zero limit is almost always a
+    configuration mistake and would otherwise make a message silently disappear.
     """
 
     max_attachments: int | None = None
@@ -22,10 +24,28 @@ class Capabilities:
     rate_limit_per_min: int | None = None
     needs_verified_domain: bool = False
 
+    def __post_init__(self) -> None:
+        for name in (
+            "max_attachments",
+            "max_attachment_mb",
+            "max_message_mb",
+            "daily_limit",
+            "rate_limit_per_min",
+        ):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+                raise TypeError(f"{name} must be an integer or None")
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be > 0")
+
 
 @dataclass(frozen=True)
 class SendResult:
-    """Outcome of one provider attempt (mirrors docs/03 NotificationAttempt)."""
+    """Provider-neutral result of one send attempt.
+
+    ``provider_message_id`` is safe metadata only.  Provider response bodies and credentials
+    deliberately have no field here, so an adapter cannot accidentally persist them.
+    """
 
     provider_name: str
     ok: bool
@@ -35,7 +55,12 @@ class SendResult:
 
 
 class SendError(Exception):
-    """A concrete provider failed to send; carries a machine-readable error code."""
+    """Backward-compatible name for a provider send failure.
+
+    New adapters should raise :class:`tender_intelligence.mail.errors.MailError`, which adds
+    retry/permanent/possible-duplicate classification.  Keeping this small compatibility
+    exception avoids breaking the pre-Prompt-11 provider seam.
+    """
 
     def __init__(self, error_code: str, message: str) -> None:
         super().__init__(message)
@@ -46,11 +71,13 @@ class SendError(Exception):
 class MailProvider(ABC):
     """Platform-neutral mail provider seam (v1.1 §5.10.2).
 
-    Concrete adapters (Sendlib first, Phase 1) implement :meth:`send` and expose
-    :attr:`capabilities`. Business logic never branches on provider identity.
+    The interface intentionally contains only provider-independent operations.  Sender and
+    credential material belongs to the provider configuration/adapter boundary; the chain
+    never needs to inspect it.
     """
 
     name: str = "abstract"
+    provider_type: str = "abstract"
 
     @property
     @abstractmethod
@@ -59,5 +86,7 @@ class MailProvider(ABC):
 
     @abstractmethod
     def send(self, message: EmailMessage) -> SendResult:
-        """Deliver ``message``. Raise :class:`SendError` on provider failure so the caller
-        can fail over or mark the attempt failed with the right error code."""
+        """Deliver ``message`` or raise a classified :class:`MailError`.
+
+        A returned ``SendResult(ok=False)`` is also treated as a failed attempt by the chain.
+        """

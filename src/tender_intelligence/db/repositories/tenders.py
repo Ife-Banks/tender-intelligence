@@ -145,3 +145,48 @@ class TenderRepository(Repository):
 
     def get_by_correlation(self, correlation_id: str) -> Tender | None:
         return self.session.scalar(select(Tender).where(Tender.correlation_id == correlation_id))
+
+    def apply_deadline_resolution(
+        self,
+        tender: Tender,
+        result: "DeadlineResult",  # type: ignore[name-defined]
+        resolved_at: "datetime",   # type: ignore[name-defined]
+    ) -> None:
+        """Persist the outcome of deadline resolution (Prompt 12.1).
+
+        Upserts one ``TenderDeadlineResolution`` row (migration 0010, separate table).
+        Never touches ``Tender.deadline`` / ``Tender.deadline_timezone`` — those are owned
+        by Prompt 05 dedup and compared by the classify module for DEADLINE_CHANGED.
+
+        ``resolved_at`` is passed in by the caller so it can be stamped consistently
+        in both the DB row and any audit log lines within the same operation.
+        """
+        from tender_intelligence.deadline.model import RESOLVED  # local import avoids circular
+        from tender_intelligence.db.models.deadline import TenderDeadlineResolution
+
+        deadline_resolved = None
+        if result.status == RESOLVED and result.deadline_utc is not None:
+            deadline_resolved = result.deadline_utc
+
+        # Upsert: update existing row or create a new one
+        existing = self.session.scalar(
+            select(TenderDeadlineResolution).where(
+                TenderDeadlineResolution.tender_id == tender.id
+            )
+        )
+        if existing is not None:
+            existing.deadline_resolved = deadline_resolved
+            existing.deadline_source = result.source
+            existing.deadline_timezone = result.deadline_timezone
+            existing.deadline_evidence = result.evidence or {}
+            existing.deadline_resolved_at = resolved_at
+        else:
+            row = TenderDeadlineResolution(
+                tender_id=tender.id,
+                deadline_resolved=deadline_resolved,
+                deadline_source=result.source,
+                deadline_timezone=result.deadline_timezone,
+                deadline_evidence=result.evidence or {},
+                deadline_resolved_at=resolved_at,
+            )
+            self.session.add(row)

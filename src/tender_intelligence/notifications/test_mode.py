@@ -5,6 +5,12 @@ from __future__ import annotations
 TEST_PREFIX = "[TEST]"
 
 
+def has_test_prefix(subject: str) -> bool:
+    """Return whether *subject* already has the exact standalone Test Mode marker."""
+
+    return subject == TEST_PREFIX or subject.startswith(f"{TEST_PREFIX} ")
+
+
 class TestModePolicy:
     """Policy gate that prevents tender emails from reaching business recipients while
     Test Mode is enabled (PROJECT_RULES #11).
@@ -30,13 +36,15 @@ class TestModePolicy:
         """
         if not self._enabled:
             return True
-        allowed = {t for t in list_types if t == "dev_alert"}
-        return bool(allowed) and not any(t == "tender" for t in list_types)
+        # The safe route is an allow-list, not merely a tender-list exclusion.  This rejects
+        # unknown/mixed snapshot types as well as the business list, so a future recipient
+        # category cannot accidentally bypass the Test Mode boundary.
+        return bool(list_types) and set(list_types) <= {"dev_alert"}
 
     def apply_subject_prefix(self, subject: str) -> str:
         """Prefix *subject* with ``[TEST]`` exactly once."""
         if not self._enabled:
             return subject
-        if subject.startswith(TEST_PREFIX):
+        if has_test_prefix(subject):
             return subject
         return f"{TEST_PREFIX} {subject}"

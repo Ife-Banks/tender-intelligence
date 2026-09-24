@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
                 from tender_intelligence.config.seed import seed_from_yaml
 
                 counts = seed_from_yaml(session, str(yaml_path))
-            if settings.dev_alert_email and not counts.get("dev_alert_email", 0):
+            if settings.dev_alert_email and not counts.get("dev_alert", 0):
                 seed_dev_alert_recipient(session, settings.dev_alert_email)
             session.commit()
             seeded = {

@@ -85,7 +85,7 @@ class TestLLMInterface:
     def test_response_and_usage(self):
         resp = LLMResponse(content="go", profile_name="p", model="m")
         assert resp.content == "go"
-        assert resp.usage.prompt_tokens == 0
+        assert resp.usage is None
 
     def test_chat_error_code(self):
         err = LLMError("timeout")

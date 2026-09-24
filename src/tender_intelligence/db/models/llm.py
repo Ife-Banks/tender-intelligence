@@ -91,3 +91,7 @@ class LLMCall(Base, TimestampMixin):
     est_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="success")
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tender_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(255), nullable=True)

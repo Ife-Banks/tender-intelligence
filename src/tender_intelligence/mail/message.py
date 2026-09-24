@@ -52,6 +52,4 @@ class EmailMessage:
                 raise InvalidAddress(address)
         for attachment in self.attachments:
             if "/" in attachment.filename or "\\" in attachment.filename:
-                raise InvalidAddress(
-                    f"unsafe attachment filename: {attachment.filename!r}"
-                )
+                raise InvalidAddress(f"unsafe attachment filename: {attachment.filename!r}")

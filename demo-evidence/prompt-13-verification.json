@@ -1,0 +1,34 @@
+{
+  "prompt": "13",
+  "stage": "AI_TRIAGE",
+  "status": "NEEDS_FIXES",
+  "ready_for_prompt_14": false,
+  "rule_mode_verified": true,
+  "model_mode_verified": true,
+  "blank_defaults_verified": true,
+  "failed_vs_discarded_verified": true,
+  "timeline_verified": true,
+  "stage_b_handoff_verified": true,
+  "cost_control_hook_verified": true,
+  "kb_not_sent_to_triage": true,
+  "test_mode_preserved": true,
+  "regression_passed": false,
+  "tests": {
+    "run": 590,
+    "passed": 589,
+    "failed": 1
+  },
+  "defects_fixed": [
+    "Removed fabricated rule-mode scores and arbitrary threshold decisions",
+    "Restricted triage model input to allowlisted public tender fields",
+    "Persisted triage_failed for malformed rules and missing score under configured threshold",
+    "Added two timeout retries and assigned active fallback with per-attempt LLMCall records",
+    "Persisted run ID on triage results and timeline events",
+    "Added an integration-tested pass-only downstream handoff seam without verdict logic"
+  ],
+  "remaining_defects": [
+    "KB pursue/skip defaults lack a canonical content schema and reader",
+    "Repeated-run, concurrency, and A/B/C per-tender isolation tests remain incomplete",
+    "Full suite has one unrelated French WAHO deadline parser fixture failure"
+  ]
+}

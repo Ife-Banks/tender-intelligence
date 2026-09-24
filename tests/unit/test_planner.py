@@ -46,11 +46,13 @@ class TestAttachmentPlanner:
         assert plan.link_filenames == ("b.pdf",)
 
     def test_typical_provider(self):
+        # 30 x 1 MB against (20 attachments, 10 MB each, 25 MB total). Prompt 11 §17 measures
+        # the message cap on the base64-encoded payload, so 18 files (not 20) fit in 25 MB.
         plan = AttachmentPlanner(
             Capabilities(max_attachments=20, max_attachment_mb=10, max_message_mb=25)
         ).plan([_doc(f"doc{i}.pdf", 1) for i in range(30)])
-        assert len(plan.attach) == 20
-        assert len(plan.link_filenames) == 10
+        assert len(plan.attach) == 18
+        assert len(plan.link_filenames) == 12
 
     def test_sendlib_free_tier(self):
         plan = AttachmentPlanner(Capabilities(max_attachments=5, max_attachment_mb=1)).plan(

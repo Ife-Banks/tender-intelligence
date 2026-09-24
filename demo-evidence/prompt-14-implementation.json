@@ -1,0 +1,33 @@
+{
+  "prompt": "14",
+  "stage": "AI_VERDICT_STAGE_B",
+  "status": "IMPLEMENTED_READY_FOR_INDEPENDENT_BEHAVIORAL_VERIFICATION",
+  "ready_for_independent_behavioral_verification": true,
+  "schema_version": "verdict.v1",
+  "prompt_version": "stage-b.v1",
+  "verdict_contract": ["APPLY", "DO NOT APPLY", "APPLY WITH CONDITIONS"],
+  "generation_status_contract": ["VERDICT_AVAILABLE", "VERDICT_FAILED", "AWAITING_BUDGET", "AWAITING_APPROVED_PROVIDER"],
+  "strict_schema_validation": true,
+  "one_validation_retry": true,
+  "approved_profile_gate": true,
+  "approved_fallback_gate": true,
+  "complete_kb_context": true,
+  "map_reduce": true,
+  "authoritative_deadline_integration": true,
+  "budget_guard": true,
+  "formatter_sends_email": false,
+  "live_provider_calls": false,
+  "tests": {
+    "focused_regression_run": 30,
+    "focused_regression_passed": 30,
+    "verdict_engine_and_migrations_failed": 0,
+    "pass_only_pipeline_handoff": "passed",
+    "full_pipeline_regression": "initial run had two failures; Prompt 14 pipeline trace assertion was corrected and passed independently; pre-existing WAHO parser fixture remains; full suite not rerun after correction"
+  },
+  "open_runtime_gaps": [
+    "Production LLM client/runtime wiring is not present; Stage B is injectable and must be wired before live use.",
+    "Urgency currently compares calendar days; holiday-aware business-day interpretation needs independent confirmation.",
+    "No production provider profile, credentials, or budget amount was configured."
+  ],
+  "excluded": ["email sending", "Admin UI", "Admin API", "RAG", "embeddings", "vector search", "source adapters"]
+}

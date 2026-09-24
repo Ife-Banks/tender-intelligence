@@ -1,0 +1,39 @@
+PROMPT 12.2 OFFLINE CHECKS
+
+Environment presence checks (values not printed):
+  TI_SENDLIB_API_KEY: absent (not an existing project key; Sendlib API key belongs in the
+    encrypted MailProvider credentials JSON under key "api_key")
+  TI_DEV_ALERT_EMAIL: absent
+  TI_MASTER_KEY: absent
+
+Existing unit + integration command, first attempt:
+  uv run pytest tests/unit/test_sendlib_adapter.py tests/integration/test_notification_service.py
+  Result: 20 passed, 24 setup errors because the host denied scanning
+  C:\Users\ifeol\AppData\Local\Temp\pytest-of-ifeol.
+
+Rerun with a workspace-local temporary root and pytest cache disabled:
+  uv run pytest -p no:cacheprovider --basetemp=.pytest-tmp tests/unit/test_sendlib_adapter.py
+    tests/integration/test_notification_service.py
+  Result: 44 passed in 19.02s.
+
+Existing Sendlib unit tests are included in the 20 passing tests. They cover adapter behavior,
+including invalid-recipient validation and missing API-key configuration handling.
+
+Deterministic mock-provider integration result:
+  PASSED. Existing test_test_mode_delivery coverage used a persisted verdict fixture, routed
+  to its fixture dev_alert recipient, prefixed [TEST], and excluded its fixture business
+  recipient. The mock Sendlib response produced a sent NotificationAttempt and sent
+  NotificationLog, both linked to the configured test provider, with a recipient snapshot
+  containing only dev_alert. This is offline mock evidence, not live Sendlib delivery.
+
+Invalid API key, invalid recipient, and provider-unavailable behavior:
+  Mock/unit adapter and notification-chain checks passed in the 44-test run. Real Sendlib key
+  acceptance and real recipient acceptance were NOT EXECUTED. No provider secret, approved
+  sender, or operator test recipient was supplied. No live email was sent.
+
+Test Mode + deterministic verdict fixture -> NotificationService -> routing -> Sendlib ->
+NotificationAttempt -> NotificationLog against mock transport:
+  Existing integration coverage is present in tests/integration/test_notification_service.py,
+  but could not be executed because pytest temporary-directory setup was denied by the host.
+
+No business email sent: CONFIRMED for this task; no live provider call was made.

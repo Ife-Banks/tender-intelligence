@@ -50,6 +50,8 @@ SOURCE_TYPE: Final[str] = "paginated_html_list"
 #: card wrapper per listing row (``div.col-md-6`` containing ``div.card``).
 DEFAULT_PARSER_CONFIG: Final[dict[str, Any]] = {
     "row_selector": "div.col-md-6",
+    #: Prompt 12.1 §8: LIVE-VERIFIED 2026-09-24 — listing card uses
+    #: ``div.card-header h5 a`` for the title link.
     "title_selector": "div.card-header h5 a",
     #: ASSUMED from fixtures: detail link local path ``/tenders/tenders/{id}/list``.
     "detail_href_pattern": r"/tenders/tenders/(?P<id>\d+)/list",
@@ -58,7 +60,15 @@ DEFAULT_PARSER_CONFIG: Final[dict[str, Any]] = {
     "published_date_pattern": (
         r"Start Date:\s*(?P<raw>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?P<tz>UTC|GMT)"
     ),
+    #: Prompt 12.1 §7/§8 — deadline patterns, most-specific first.
+    #: Pattern 0: Machine-readable "End Date: YYYY-MM-DD HH:MM:SS UTC" — LIVE-VERIFIED.
+    #: Present on BOTH listing cards and detail pages; next-sibling of <strong>End Date:</strong>.
+    #: This is the primary authoritative source; tried first.
     "deadline_patterns": [
+        (
+            r"End Date:\s*(?P<year>\d{4})-(?P<month_num>\d{2})-(?P<day>\d{2})"
+            r"\s+(?P<hour>\d{2}):(?P<minute>\d{2}):\d{2}\s+(?P<tz>UTC|GMT)"
+        ),
         (
             r"Deadline(?: for submission of applications)?:\s*(?:All proposals must be "
             r"received no later than\s+|at\s+|le\s+)?"
@@ -71,7 +81,14 @@ DEFAULT_PARSER_CONFIG: Final[dict[str, Any]] = {
             r"(?:toutes les offres doivent(?: être| etre)? reçues? au plus tard\s+|at\s+|"
             r"le\s+)?"
             r"(?P<day>\d{1,2})\s+(?P<month>[A-Za-zÄÜÖäüöéèàçûê]+)\s+(?P<year>\d{4})"
-            r"(?:\s+at\s+(?P<hour>\d{1,2})[.:](?P<minute>\d{2})\s*(?P<ampm>[ap]\.?m\.?))?"
+            r"(?:\s+(?:à|at)\s+(?P<hour>\d{1,2})\s*[.:h]\s*(?P<minute>\d{2})\s*(?P<ampm>[ap]\.?m\.?))?"
+            r"\s*(?P<tz>[A-Z]{2,4})?"
+        ),
+        # Portuguese pattern
+        (
+            r"Prazo(?:[^:]{0,60})?:\s*"
+            r"(?P<day>\d{1,2})\s+(?:de\s+)?(?P<month>[A-Za-zÀ-ÿ]+)\s+(?:de\s+)?(?P<year>\d{4})"
+            r"(?:,?\s*(?:às?|at|le)\s*(?P<hour>\d{1,2})[h:.](?P<minute>\d{2}))?"
             r"\s*(?P<tz>[A-Z]{2,4})?"
         ),
     ],
@@ -79,26 +96,31 @@ DEFAULT_PARSER_CONFIG: Final[dict[str, Any]] = {
     "max_pages": 15,
     "allow_empty_listing": False,
     "expected_languages": ["en", "fr", "pt"],
-    #: ASSUMED from project fixtures (docs/07a-waho-detail-discovery-notes.md): a detail page
-    #: reuses the listing card vocabulary — a ``div.card-header`` heading and a
-    #: ``div.card-body`` rich-text area (``.trix-content``) of ``<strong>LABEL: value</strong>``
-    #: blocks, with document links as Bootstrap buttons/anchors in an attachments area.
+    #: Prompt 12.1 §8: LIVE-VERIFIED 2026-09-24 — detail page uses
+    #: ``div.card-header a`` for the title (NOT h1/h2/h3).
+    #: The fixture-derived selectors (h1/h2/h3) are kept as fallbacks.
     "detail_title_selectors": [
+        "div.card-header a",      # LIVE-VERIFIED primary
+        "div.card-header h5 a",   # alternate fixture format
         "div.card-header h1",
         "h1",
         "div.card-header h2",
         "h2",
         "div.card-header h3",
     ],
-    "detail_body_selector": "div.card-body div.trix-content",
-    "attachment_block_selectors": ["div.attachments", "#attachments"],
+    "detail_body_selector": "div.card-body",
+    #: Prompt 12.1 §8: LIVE-VERIFIED — attachments are in <ol> inside div.card-body.
+    "attachment_block_selectors": ["div.card-body", "div.attachments", "#attachments"],
     "attachment_path_markers": ["/uploads/", "/documents/", "/files/"],
     "document_extensions": (r"\.(?:pdf|docx?|xlsx?|pptx?|zip|rar|7z|od[tsp]|rtf|txt|csv)$"),
     "excluded_href_patterns": [
         r"/submissions/",
+        r"/upload_bid_password",
         r"^javascript:",
         r"^mailto:",
         r"^#",
+        r"^/tenders$",
+        r"^/tenders/tenders/list",
     ],
     "reference_labels": ["reference", "référence", "referencia", "referência", "ref"],
     "procuring_body_labels": [
@@ -460,8 +482,33 @@ class WahoPaginatedAdapter(SourceAdapter):
             match = re.search(pattern, card_text)
             if not match:
                 continue
-            day, month_name, year = (match.group("day"), match.group("month"), match.group("year"))
-            month = _MONTHS.get(month_name.lower())
+            gd = match.groupdict()
+
+            # ── Machine-readable "End Date: YYYY-MM-DD HH:MM:SS UTC" ──────
+            if "month_num" in gd and gd.get("month_num"):
+                try:
+                    year = int(gd["year"])
+                    month = int(gd["month_num"])
+                    day = int(gd["day"])
+                    hour = int(gd["hour"]) if gd.get("hour") else 0
+                    minute = int(gd["minute"]) if gd.get("minute") else 0
+                except (ValueError, TypeError):
+                    return None, None, match.group(0)
+                tz_name = (gd.get("tz") or "UTC").upper()
+                tz = _TZ_OFFSETS.get(tz_name, UTC)
+                try:
+                    deadline = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    return None, tz_name or None, match.group(0)
+                return (
+                    deadline.replace(tzinfo=tz).astimezone(UTC),
+                    tz_name,
+                    match.group(0),
+                )
+
+            # ── Human-readable textual deadline ───────────────────────────
+            day, month_name, year = (gd.get("day"), gd.get("month"), gd.get("year"))
+            month = _MONTHS.get((month_name or "").lower())
             if month is None:
                 log.warning(
                     "deadline uses unrecognised month %r",
@@ -469,17 +516,17 @@ class WahoPaginatedAdapter(SourceAdapter):
                     extra={"stage": "discovery", "status": "warning"},
                 )
                 return None, None, match.group(0)
-            if match.groupdict().get("hour") is not None:
-                hour = int(match.group("hour"))
-                minute = int(match.group("minute"))
-                if match.groupdict().get("ampm") and match.group("ampm").lstrip().startswith("p"):
+            if gd.get("hour") is not None:
+                hour = int(gd["hour"])
+                minute = int(gd["minute"])
+                if gd.get("ampm") and match.group("ampm").lstrip().startswith("p"):
                     if hour != 12:
                         hour += 12
-                elif match.groupdict().get("ampm") and hour == 12:
+                elif gd.get("ampm") and hour == 12:
                     hour = 0
             else:
                 hour = minute = 0
-            tz_name = match.groupdict().get("tz")
+            tz_name = gd.get("tz")
             tz = _TZ_OFFSETS.get(tz_name) if tz_name else None
             deadline_raw = match.group(0)
             try:
@@ -600,20 +647,30 @@ class WahoPaginatedAdapter(SourceAdapter):
                 error_code=PARSER_MISMATCH,
                 context={"tender_id": tender_id, "url": response.final_url},
             )
+        # Prompt 12.1 §8: search the full card-body (contains the machine-readable End Date)
+        # as well as any trix-content rich text for deadline / metadata fields.
         body_el = soup.select_one(self._config["detail_body_selector"])
         body_text = body_el.get_text(" ", strip=True) if body_el is not None else ""
-        blocks = self._label_blocks(body_el) if body_el is not None else []
+        # Also try trix-content for label/value blocks (human-readable deadline patterns)
+        trix_el = soup.select_one("div.trix-content")
+        trix_text = trix_el.get_text(" ", strip=True) if trix_el is not None else ""
+        # Full text = card-body (includes End Date: timestamp) + trix-content
+        full_text = body_text + " " + trix_text
 
-        published_at, published_raw = self._parse_published(body_text)
-        deadline_at, deadline_tz, deadline_raw = self._parse_deadline(body_text)
+        blocks = self._label_blocks(trix_el) if trix_el is not None else (
+            self._label_blocks(body_el) if body_el is not None else []
+        )
 
-        references = self._references(blocks, body_text)
+        published_at, published_raw = self._parse_published(full_text)
+        deadline_at, deadline_tz, deadline_raw = self._parse_deadline(full_text)
+
+        references = self._references(blocks, full_text)
         procuring_body = self._first_value(blocks, self._config["procuring_body_labels"])
         scope = self._first_value(blocks, self._config["scope_labels"])
         requirements = self._values(blocks, self._config["requirements_labels"])
 
         raw_metadata: dict[str, Any] = {
-            "language": self._guess_language(body_text or title),
+            "language": self._guess_language(trix_text or body_text or title),
             "detail_page_url": response.final_url,
         }
         if published_raw:

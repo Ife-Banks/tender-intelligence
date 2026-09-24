@@ -329,15 +329,57 @@ the email footer understates how partial the inputs were — and the reverse cho
 for every tender carrying a logo or an organogram.
 ```
 
+## O23. Update-event identity versus the literal notification dedupe key
+
+```
+Decision: How should a legitimate non-material update that reuses the same Verdict row be
+represented without violating the documented dedupe key (tender + verdict + recipient-set hash)?
+Why it matters: §8.14 requires a distinct update email and says to reuse the existing verdict
+when re-evaluation is not material, while §8.12 defines the dedupe key without a notification
+kind or event identity. A material update normally creates a new Verdict ID and is naturally
+distinct, but the non-material case is underspecified.
+Current status: OPEN — Prompt 11 implements the literal key and an explicit NotificationEvent
+seam; it does not silently add a business/event identity to that key.
+Known options: (a) require a new verdict/version artefact for every distinct update; (b) approve
+a separate event fingerprint/notification-instance key while retaining the documented header
+key; (c) suppress same-verdict update email and document that choice.
+Information required: OPEX/build-team decision on whether non-material update mail is required
+when the verdict is unchanged.
+Who should decide: OPEX business owner with the build/maintain team.
+Impact if unresolved: a same-verdict update can be treated as an idempotent rerun; no data is
+lost, but a requested update notification may be suppressed.
+```
+
+## O24. Sendlib custom MIME-header support for notification idempotency
+
+```
+Decision: Does the selected Sendlib API expose a supported way to place the notification dedupe
+key on the delivered email (or is the provider's authenticated HTTP request header the available
+boundary)?
+Why it matters: v1.1 requires the dedupe key to be stored and sent as an email header. The current
+Sendlib `/api/send` documentation lists the request fields but does not document an arbitrary MIME
+`headers` field.
+Current status: OPEN — Prompt 11 uses the documented API shape and sends
+`X-Tender-Notification-Dedupe-Key` on the authenticated HTTP request; it does not invent an
+unsupported JSON field or claim that the value is present in the delivered message.
+Known options: (a) obtain vendor confirmation/API support for custom MIME headers; (b) use a
+provider with documented custom-header support; (c) accept request-level idempotency metadata as
+the Sendlib boundary and document the limitation.
+Information required: Current Sendlib contract or a provider-2 decision.
+Who should decide: Build/maintain team with OPEX visibility.
+Impact if unresolved: normal deduplication still works in the system of record and at the provider
+request boundary, but end-to-end delivery-side header visibility is not independently verifiable.
+```
+
 ---
 
 ## Decision summary tables
 
 | Who | Decisions |
 |---|---|
-| OPEX (business) | O1, O5, O6, O7, O8, O9, O12, O16, O20, O21, O22 |
+| OPEX (business) | O1, O5, O6, O7, O8, O9, O12, O16, O20, O21, O22, O23 |
 | OPEX (business + IT) | O3, O10, O11 |
-| Build/maintain team (+ OPEX where relevant) | O2, O4, O13, O14, O18 |
+| Build/maintain team (+ OPEX where relevant) | O2, O4, O13, O14, O18, O24 |
 | OPEX (IT) + build team | O17 |
 | Build team (evidenced by tests) | O18 |
 

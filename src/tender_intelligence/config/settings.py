@@ -25,6 +25,12 @@ class EnvSettings(BaseSettings):
     dev_alert_email: str = Field(default="")
     log_level: str = Field(default="INFO")
     storage_dir: str = Field(default="./data/documents")
+    #: HMAC key for secure expiring download links (docs/08 §8.9). When empty, the master
+    #: key is used — both live outside the database, so a captured DB cannot forge links.
+    link_signing_secret: str = Field(default="")
+    #: Public root for generated secure links. The serving host is an open decision (O10),
+    #: so this is a placeholder until the archive service gets a confirmed address.
+    link_base_url: str = Field(default="https://archive.example.invalid")
 
     @property
     def has_master_key(self) -> bool:

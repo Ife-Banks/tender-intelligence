@@ -26,9 +26,9 @@ class LLMMessage:
 class LLMUsage:
     """Token/cost usage mirroring DM ``LLMCall`` fields."""
 
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    estimated_cost_usd: float = 0.0
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    estimated_cost_usd: float | None = None
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ class LLMResponse:
     content: str
     profile_name: str
     model: str
-    usage: LLMUsage = field(default_factory=LLMUsage)
+    usage: LLMUsage | None = None
     raw: dict = field(default_factory=dict)
 
 

@@ -52,6 +52,8 @@ class StageNumber(StrEnum):
     DETAIL = "07-detail-document-discovery"
     ACQUISITION = "08-acquisition"
     PROCESSING = "09-processing"
+    TRIAGE = "13-triage"
+    VERDICT = "14-verdict"
 
 
 #: Execution order, derived from the enum's declaration order (prompt 10 §6).

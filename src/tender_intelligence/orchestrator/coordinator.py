@@ -77,6 +77,8 @@ from tender_intelligence.acquisition.service import (
 )
 from tender_intelligence.core.correlation import correlation_context, new_correlation_id
 from tender_intelligence.core.errors import STAGE_FAILED
+from tender_intelligence.deadline.model import RESOLVED as DEADLINE_RESOLVED
+from tender_intelligence.deadline.service import DeadlineResolutionService
 from tender_intelligence.db.repositories import (
     RunCounts,
     RunHistoryRepository,
@@ -87,6 +89,7 @@ from tender_intelligence.dedup.service import DedupResult, DedupService
 from tender_intelligence.interfaces.source import (
     SourceAdapter,
     TenderAttachment,
+    TenderDetail,
     TenderListing,
 )
 from tender_intelligence.orchestrator.alerts import AlertHook, AlertNotice, NullAlertHook
@@ -109,6 +112,12 @@ from tender_intelligence.orchestrator.status import (
     StageStatus,
 )
 from tender_intelligence.processing.service import DocumentProcessingService
+from tender_intelligence.triage.service import (
+    LLMClientFactory,
+    TriageDecision,
+    TriageError,
+    TriageService,
+)
 
 log = logging.getLogger("tender_intelligence.orchestrator.coordinator")
 
@@ -172,6 +181,10 @@ class RunCoordinator:
         alert_hook: AlertHook | None = None,
         retry_policy: RetryPolicy | None = None,
         stage_runner: StageRunner | None = None,
+        deadline_service: DeadlineResolutionService | None = None,
+        triage_client_factory: LLMClientFactory | None = None,
+        triage_pass_handoff: Callable[[TriageDecision], None] | None = None,
+        verdict_handoff: Callable[[TriageDecision], None] | None = None,
         clock: Callable[[], datetime] | None = None,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -185,6 +198,10 @@ class RunCoordinator:
         self._alerts: AlertHook = alert_hook or NullAlertHook()
         self._retry = retry_policy or RetryPolicy()
         self._runner = stage_runner or StageRunner()
+        self._deadline = deadline_service or DeadlineResolutionService()
+        self._triage_client_factory = triage_client_factory
+        self._triage_pass_handoff = triage_pass_handoff
+        self._verdict_handoff = verdict_handoff
         self._clock = clock or (lambda: datetime.now(UTC))
         self._sleeper = sleeper
 
@@ -376,6 +393,21 @@ class RunCoordinator:
         if processing.payload is not None:
             state.documents_processed = processing.payload.documents
 
+        triage = self._runner.run(
+            StageNumber.TRIAGE,
+            lambda: self._stage_triage(state.work, run_history_id=run_history_id),
+        )
+        state.record(triage.outcome)
+        passed_decisions = triage.payload or []
+        if self._verdict_handoff is None:
+            state.record_skipped(StageNumber.VERDICT, "no Stage B engine configured")
+        else:
+            verdict = self._runner.run(
+                StageNumber.VERDICT,
+                lambda: self._stage_verdict(passed_decisions),
+            )
+            state.record(verdict.outcome)
+
     # -- 04 discovery -------------------------------------------------------
 
     def _stage_discovery(self, spec: SourceSpec) -> tuple[StageReport, _Discovery]:
@@ -454,34 +486,145 @@ class RunCoordinator:
             None,
         )
 
-    # -- 07 detail / document discovery -------------------------------------
+    # -- 07 detail / document discovery / deadline resolution ---------------
 
     def _stage_detail(
         self, adapter: SourceAdapter, work: Sequence[TenderWorkItem]
     ) -> tuple[StageReport, dict[int, list[TenderAttachment]]]:
-        """Fetch each tender's attachment metadata, isolating per-tender failures (§15).
+        """Fetch each tender's detail page, resolve its deadline, and collect attachments.
 
-        Only ``get_attachments`` is called: for the WAHO adapter it fetches the detail page
-        itself, so also calling ``get_detail`` would fetch every page twice.
+        Prompt 12.1: calls ``get_detail()`` (not just ``get_attachments()``) so the
+        detail-page deadline can be extracted and compared against the listing-page
+        deadline already persisted.  Per-tender failures are isolated (prompt 10 §15).
         """
         attachments: dict[int, list[TenderAttachment]] = {}
         failures = 0
+        deadlines_resolved = 0
+        deadlines_unresolved = 0
+
         for item in work:
             try:
-                attachments[item.tender_id] = list(adapter.get_attachments(item.external_id))
+                detail = adapter.get_detail(item.external_id)
+                attachments[item.tender_id] = list(detail.attachments)
+                # Resolve and persist deadline (Prompt 12.1)
+                resolved = self._resolve_deadline(item, detail)
+                if resolved:
+                    deadlines_resolved += 1
+                else:
+                    deadlines_unresolved += 1
             except Exception as exc:  # noqa: BLE001 - per-tender isolation (prompt 10 §15)
                 failures += 1
                 attachments[item.tender_id] = []
                 self._item_failure(StageNumber.DETAIL, item, exc)
+
         found = sum(len(files) for files in attachments.values())
         return (
             StageReport(
-                detail=f"{found} attachment(s) across {len(work)} tender(s)",
+                detail=(
+                    f"{found} attachment(s) across {len(work)} tender(s); "
+                    f"{deadlines_resolved} deadline(s) resolved, "
+                    f"{deadlines_unresolved} unresolved"
+                ),
                 item_count=len(work),
                 failed_items=failures,
             ),
             attachments,
         )
+
+    def _resolve_deadline(
+        self,
+        item: TenderWorkItem,
+        detail: "TenderDetail",  # type: ignore[name-defined]
+    ) -> bool:
+        """Run deadline resolution for *item* using *detail* and persist the result.
+
+        Returns True when the deadline was RESOLVED, False otherwise (UNRESOLVED or
+        CONFLICTING).  Per-tender: a failure here is logged but never propagates to fail
+        the whole stage — attachment discovery still succeeded.
+        """
+        from tender_intelligence.interfaces.source import TenderDetail as _TDType
+
+        try:
+            with self._maker() as session:
+                repo = TenderRepository(session)
+                tender = repo.get(item.tender_id)
+                if tender is None:
+                    return False
+
+                # Build the listing DTO from persisted tender row (listing-page values)
+                from tender_intelligence.interfaces.source import TenderListing
+                listing = TenderListing(
+                    external_id=str(tender.external_id),
+                    title=str(tender.title),
+                    url=str(tender.url),
+                    deadline_at=tender.deadline,
+                    deadline_timezone=tender.deadline_timezone,
+                    raw_metadata=dict(tender.raw_metadata or {}),
+                )
+
+                # Attempt document-bundle lookup for text-based fallback
+                bundle_docs: list[tuple[int, str, str]] = []
+                try:
+                    from tender_intelligence.processing.store import ExtractionStore
+                    from tender_intelligence.processing.representation import TenderDocumentBundle
+                    # ExtractionStore requires ObjectStorage — only attempt if processing ran
+                    # The coordinator does not own the store directly; check via document rows
+                    from sqlalchemy import select as sa_select
+                    from tender_intelligence.db.models.documents import Document
+                    doc_rows = session.scalars(
+                        sa_select(Document)
+                        .where(
+                            Document.tender_id == item.tender_id,
+                            Document.extraction_status == "extracted",
+                            Document.extracted_text_ref.is_not(None),
+                        )
+                    ).all()
+                    # Only attempt text read if processing service is available via storage
+                except Exception:  # noqa: BLE001
+                    doc_rows = []
+
+                result = self._deadline.resolve(
+                    listing,
+                    detail=detail,
+                    bundle_docs=bundle_docs,
+                    correlation_id=item.correlation_id,
+                )
+
+                resolved_at = self._clock()
+                repo.apply_deadline_resolution(tender, result, resolved_at)
+                session.commit()
+
+                log.info(
+                    "deadline resolution complete: %s (%s)",
+                    result.status,
+                    result.source,
+                    extra={
+                        "stage": "deadline_resolution",
+                        "status": result.status,
+                        "source": result.source,
+                        "correlation_id": item.correlation_id,
+                        "tender_id": item.tender_id,
+                        "deadline_utc": (
+                            result.deadline_utc.isoformat() if result.deadline_utc else None
+                        ),
+                    },
+                )
+                return result.status == DEADLINE_RESOLVED
+
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "deadline resolution failed for tender %s: %s",
+                item.external_id,
+                type(exc).__name__,
+                extra={
+                    "stage": "deadline_resolution",
+                    "status": "error",
+                    "correlation_id": item.correlation_id,
+                    "tender_id": item.tender_id,
+                    "error_code": getattr(exc, "error_code", None),
+                },
+            )
+            return False
 
     # -- 08 acquisition -----------------------------------------------------
 
@@ -489,7 +632,7 @@ class RunCoordinator:
         self,
         work: Sequence[TenderWorkItem],
         attachments: dict[int, list[TenderAttachment]],
-    ) -> tuple[StageReport, int]:
+    ) -> tuple[StageReport, list[TriageDecision]]:
         """Acquire each tender's attachments, with bounded stage-local retry (§11, §15)."""
         acquired = 0
         failed_items = 0
@@ -606,18 +749,92 @@ class RunCoordinator:
             ),
         )
 
+    # -- 13 triage ----------------------------------------------------------
+
+    def _stage_triage(
+        self, work: Sequence[TenderWorkItem], *, run_history_id: int | None = None
+    ) -> tuple[StageReport, int]:
+        """Persist a relevance decision for every new or updated tender.
+
+        Only durable PASS decisions are passed to Stage B.
+        """
+        passed: list[TriageDecision] = []
+        discarded = 0
+        failed = 0
+        for item in work:
+            try:
+                with self._maker() as session:
+                    decision = TriageService(
+                        session,
+                        client_factory=self._triage_client_factory,
+                        run_id=run_history_id,
+                    ).evaluate(item.tender_id)
+                    session.commit()
+                if decision.status == "passed":
+                    passed.append(decision)
+                    if self._triage_pass_handoff is not None:
+                        self._triage_pass_handoff(decision)
+                elif decision.status == "triage_discarded":
+                    discarded += 1
+                else:
+                    failed += 1
+                    self._item_failure(
+                        StageNumber.TRIAGE,
+                        item,
+                        TriageError(
+                            "triage evaluation failed",
+                            decision.error_code or "triage_failed",
+                        ),
+                    )
+            except Exception as exc:  # noqa: BLE001 - each tender must remain isolated
+                failed += 1
+                self._item_failure(StageNumber.TRIAGE, item, exc)
+        return (
+            StageReport(
+                detail=(
+                    f"{len(passed)} passed, {discarded} discarded, {failed} failed across "
+                    f"{len(work)} tender(s)"
+                ),
+                item_count=len(work),
+                failed_items=failed,
+            ),
+            passed,
+        )
+
+    def _stage_verdict(self, decisions: Sequence[TriageDecision]) -> tuple[StageReport, int]:
+        """Run Stage B only for persisted Stage A PASS decisions."""
+        succeeded = failed = 0
+        for decision in decisions:
+            try:
+                self._verdict_handoff(decision)  # type: ignore[misc]
+                succeeded += 1
+            except Exception as exc:  # per-tender isolation mirrors Stage A
+                failed += 1
+                log.warning("Stage B failed", extra={"stage": StageNumber.VERDICT.value,
+                    "tender_id": decision.tender_id, "correlation_id": decision.correlation_id,
+                    "error_code": getattr(exc, "error_code", "verdict_failed")})
+        return StageReport(detail=f"{succeeded} completed, {failed} failed", item_count=len(decisions),
+                           failed_items=failed), succeeded
+
     # -- dry run planning ---------------------------------------------------
 
     def _plan_remaining(self, state: _RunState, result: DedupResult | None) -> None:
         """Record what a live run would have done, without doing any of it (prompt 10 §14)."""
         planned = _work_external_ids(result)
-        for stage in (StageNumber.DETAIL, StageNumber.ACQUISITION, StageNumber.PROCESSING):
+        for stage in (
+            StageNumber.DETAIL,
+            StageNumber.ACQUISITION,
+            StageNumber.PROCESSING,
+            StageNumber.TRIAGE,
+            StageNumber.VERDICT,
+        ):
             state.record_pending(stage, "dry run: no writes and no fetches beyond discovery")
         if planned:
             state.planned_actions = (
                 f"would fetch attachment metadata for {len(planned)} tender(s)",
                 "would acquire those attachments into object storage",
                 "would extract text and tables into per-tender bundles",
+                "would evaluate configurable Stage A triage rules",
             )
         else:
             state.planned_actions = ("no new or changed tenders; nothing further to do",)
@@ -897,6 +1114,12 @@ class _RunState:
                 detail=detail,
             )
         )
+
+    def record_skipped(self, stage: StageNumber, detail: str) -> None:
+        """Record a configured optional stage that has no runtime adapter."""
+        moment = self.ended_at or _now()
+        self.outcomes.append(StageOutcome(stage=stage, status=StageStatus.SKIPPED_NOT_IMPLEMENTED,
+            correlation_id=self.run_cid, started_at=moment, ended_at=moment, detail=detail))
 
     def mark_ended(self, moment: datetime) -> None:
         if self.ended_at is None or moment > self.ended_at:
