@@ -1,0 +1,37 @@
+PROMPT 16B INDEPENDENT VERIFICATION — 2026-09-25
+
+Baseline commit: 6bac53b08cab57ce27b409a3deb6a0b138826482
+Implementation/backend files modified: none.
+Prompt 15 dependency status: NEEDS FIXES; PostgreSQL last-active recipient concurrency remains unverified.
+Prompt 16A dependency status: NEEDS FIXES; tablet/mobile visual and direct console verification outstanding.
+
+Automated commands:
+
+1) node --test tests/ui/*.test.mjs
+   24 passed, 0 failed.
+
+2) .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16b-verify-api tests/integration/test_admin_api_prompt15.py tests/integration/test_admin_ui_api_prompt16b.py
+   22 passed, 0 failed.
+
+3) .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16b-verify-reg -k 'not test_date_limite_july_gmt'
+   621 selected, all passed, 0 failed.
+   Excluded known unrelated test: tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt.
+
+4) node --check src/tender_intelligence/admin/static/app.mjs
+   Passed.
+5) node --check src/tender_intelligence/admin/static/api.mjs
+   Passed.
+6) git diff --check
+   Passed; existing line-ending warnings only.
+
+Local browser/API exercise:
+- Migrated isolated SQLite DB: `.pytest-16b-verify-local/admin-ui.db`.
+- Ran actual FastAPI Admin app at http://127.0.0.1:8000 with TI_ENV=development and TI_ADMIN_ENABLE_TEST_AUTH=false.
+- Loaded /admin/ in browser. API probe/health returned authentication-required; UI displayed auth-required panel and no fixture tender data.
+- Browser also displayed DEMO DATA · OFFLINE, OFFLINE PREVIEW “Nothing is sent” banner, Preview role control and scenario selector in live mode; Test Mode stayed loading and actor was labelled viewer. CSS `display` rules defeat the `hidden` attribute.
+- No authenticated UI mutations available because O11 is unresolved and boot does not pass optional test auth headers.
+- No business data mutation, source test, provider test, LLM call, or email send occurred.
+
+Result: live API fail-closed behavior confirmed; authenticated live UI workflow, all-ten-screen API behavior, browser console inspection, and mutation recovery are not fully verified.
+
+PROMPT 16B: NEEDS FIXES — DO NOT START PROMPT 17

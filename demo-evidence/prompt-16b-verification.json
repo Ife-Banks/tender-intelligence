@@ -1,0 +1,63 @@
+{
+  "prompt": "16B",
+  "status": "NEEDS_FIXES",
+  "ready_for_prompt_17": false,
+  "baseline_commit": "6bac53b08cab57ce27b409a3deb6a0b138826482",
+  "prompt_15_status": "NEEDS_FIXES",
+  "prompt_16a_status": "NEEDS_FIXES",
+  "actual_local_admin_api_started": true,
+  "actual_browser_api_connection": true,
+  "unauthenticated_fails_closed": true,
+  "fixture_fallback_on_401": false,
+  "authenticated_admin_browser_verified": false,
+  "authenticated_viewer_browser_verified": false,
+  "api_client_boundary_verified": true,
+  "endpoint_contract_reviewed": true,
+  "secret_safety_reviewed": true,
+  "direct_third_party_calls_found": false,
+  "test_mode_preserved": true,
+  "real_email_sent": false,
+  "real_llm_called": false,
+  "real_source_called": false,
+  "all_ten_live_screens_behaviorally_verified": false,
+  "tests": {
+    "ui_run": 24,
+    "ui_passed": 24,
+    "ui_failed": 0,
+    "prompt15_plus_16b_api_run": 22,
+    "prompt15_plus_16b_api_passed": 22,
+    "prompt15_plus_16b_api_failed": 0,
+    "broad_regression_selected": 621,
+    "broad_regression_passed": 621,
+    "broad_regression_failed": 0,
+    "excluded_known_failure": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt"
+  },
+  "findings": [
+    {
+      "severity": "HIGH",
+      "owner": "Prompt 16B UI",
+      "summary": "Live/auth-required page displays offline banner and fixture controls because CSS display rules override hidden attributes; unauthenticated actor is labelled Viewer and Test Mode remains loading."
+    },
+    {
+      "severity": "HIGH",
+      "owner": "O11 / verification environment",
+      "summary": "No authenticated browser path could be exercised; production identity is intentionally unresolved and UI does not pass optional local test-auth headers."
+    },
+    {
+      "severity": "MEDIUM",
+      "owner": "Prompt 16B tests",
+      "summary": "Browser-level live error, malformed-response, timeout, and mutation-recovery coverage is incomplete."
+    },
+    {
+      "severity": "DEPENDENCY",
+      "owner": "Prompt 15",
+      "summary": "PostgreSQL concurrent last-active development-recipient behavior remains unverified."
+    },
+    {
+      "severity": "DEPENDENCY",
+      "owner": "Prompt 16A verification",
+      "summary": "Rendered tablet/mobile and direct browser-console checks remain incomplete."
+    }
+  ],
+  "implementation_files_modified": []
+}
