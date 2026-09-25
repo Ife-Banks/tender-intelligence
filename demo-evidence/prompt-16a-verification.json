@@ -1,0 +1,40 @@
+{
+  "prompt": "16A",
+  "status": "NEEDS_FIXES",
+  "ready_for_prompt_16b": false,
+  "prompt_16b_already_present": true,
+  "ten_screens_rendered": true,
+  "fixture_states_exercised": true,
+  "fixture_isolation_verified": true,
+  "no_framework_introduced": true,
+  "api_integration_attributed_to_16a": false,
+  "desktop_visual_review": true,
+  "tablet_visual_review": false,
+  "mobile_visual_review": false,
+  "browser_console_review": false,
+  "keyboard_and_focus_review": true,
+  "secret_safety_review": true,
+  "prompt_15_api_regression_passed": true,
+  "ui_tests": { "run": 24, "passed": 24, "failed": 0 },
+  "api_integration_tests": { "run": 22, "passed": 22, "failed": 0 },
+  "full_python_suite": { "run": 622, "passed": 621, "failed": 1 },
+  "unrelated_failure": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt",
+  "findings": [
+    {
+      "severity": "MEDIUM",
+      "owner": "verification",
+      "summary": "Tablet/mobile rendered viewport and direct browser console inspection were unavailable; responsive/runtime verification remains incomplete."
+    },
+    {
+      "severity": "LOW",
+      "owner": "design-system",
+      "summary": "Small table action buttons and top-bar selectors use 34px minimum height vs the design system's 40px touch recommendation."
+    },
+    {
+      "severity": "LOW",
+      "owner": "Prompt 16B",
+      "summary": "KB upload and mail test screens retain live-action copy while running in fixture mode; fixture adapter does not perform those side effects."
+    }
+  ],
+  "implementation_files_modified": []
+}

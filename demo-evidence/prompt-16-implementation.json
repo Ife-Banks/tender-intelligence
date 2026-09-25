@@ -1,0 +1,41 @@
+{
+  "prompt": "16",
+  "stage": "ADMIN_UI",
+  "status": "IMPLEMENTED",
+  "ready_for_independent_behavioral_verification": true,
+  "screens": [
+    "health",
+    "sources",
+    "tenders_and_timeline",
+    "knowledge_base_versions",
+    "llm_profiles_and_roles",
+    "recipients",
+    "mail_providers_and_test_email",
+    "triage_and_urgency",
+    "settings",
+    "audit"
+  ],
+  "design_system_persisted": true,
+  "design_system_path": "design-system/tender-intelligence-admin/MASTER.md",
+  "context7_available": false,
+  "native_web_documentation_reviewed": true,
+  "admin_api_implemented": false,
+  "identity_provider_implemented": false,
+  "credentials_persisted_in_browser": false,
+  "provider_calls_from_browser": false,
+  "business_email_sent": false,
+  "test_mode_semantics_changed": false,
+  "tests": {
+    "ui_run": 10,
+    "ui_passed": 10,
+    "ui_failed": 0,
+    "admin_api_regression_run": 21,
+    "admin_api_regression_passed": 21,
+    "admin_api_regression_failed": 0,
+    "interactive_browser_screens_verified": false
+  },
+  "upstream_dependencies": [
+    "O11 Admin identity resolver/provider must be configured by the API owner.",
+    "Prompt 15 PostgreSQL row-lock/concurrency behavior remains outside this UI task."
+  ]
+}

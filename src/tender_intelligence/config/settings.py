@@ -20,7 +20,9 @@ class EnvSettings(BaseSettings):
         env_prefix="TI_", env_file=".env", extra="ignore", populate_by_name=True
     )
 
-    database_url: str = Field(default="postgresql+psycopg://tender:tender@localhost:5432/tender_intelligence")
+    database_url: str = Field(
+        default="postgresql+psycopg://tender:tender@localhost:5432/tender_intelligence"
+    )
     master_key: str = Field(default="")
     dev_alert_email: str = Field(default="")
     log_level: str = Field(default="INFO")
@@ -31,6 +33,11 @@ class EnvSettings(BaseSettings):
     #: Public root for generated secure links. The serving host is an open decision (O10),
     #: so this is a placeholder until the archive service gets a confirmed address.
     link_base_url: str = Field(default="https://archive.example.invalid")
+    #: [PROPOSED technical guard] Admin KB upload ceiling; can be lowered per environment.
+    admin_max_kb_upload_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
+    #: Test-only header actor mechanism; production auth remains an injectable O11 seam.
+    admin_enable_test_auth: bool = False
+    environment: str = Field(default="production", validation_alias="TI_ENV")
 
     @property
     def has_master_key(self) -> bool:

@@ -43,6 +43,7 @@ from tender_intelligence.notifications.admin import RecipientAdmin, RecipientAdm
 from tender_intelligence.notifications.banner import RED_BANNER_TYPE
 from tender_intelligence.notifications.service import (
     NotificationError,
+    NotificationSafetyError,
     NotificationService,
     NullMailAlertHook,
 )
@@ -261,6 +262,52 @@ def world(session_factory_gr, tmp_path):
 
 
 class TestTestModeDelivery:
+    def test_admin_test_email_uses_chain_and_creates_non_tender_attempt(self, world) -> None:
+        world.add_dev("dev-test@opex.example")
+        world.add_business("business@acme.example")
+        world.add_provider(name="sendlib-test")
+        handler = _Handler(200)
+        service = world.service(handler)
+
+        outcome = service.send_test_email(
+            "dev-test@opex.example",
+            "Provider check",
+            "[TEST] Safe test body",
+            correlation_id="c" * 36,
+        )
+
+        assert outcome.status == "sent"
+        assert outcome.provider_used == "sendlib-test"
+        assert len(handler.requests) == 1
+        payload = json.loads(handler.requests[0].content)
+        assert payload["to"] == ["dev-test@opex.example"]
+        assert payload["subject"].startswith("[TEST]")
+        with world.session_factory() as session:
+            log = session.get(NotificationLog, outcome.notification_log_id)
+            assert log is not None and log.tender_id is None and log.verdict_id is None
+            assert log.notification_kind == "test" and log.status == "sent"
+            assert log.correlation_id == "c" * 36
+            attempts = _attempts_for(session, log.id)
+            assert len(attempts) == 1 and attempts[0].status == "sent"
+            assert attempts[0].provider_name == "sendlib-test"
+            assert (
+                session.query(NotificationLog)
+                .filter(NotificationLog.tender_id.is_not(None))
+                .count()
+                == 0
+            )
+
+    def test_admin_test_email_refuses_non_dev_recipient_and_test_mode_off(self, world) -> None:
+        world.add_dev("dev-test@opex.example")
+        world.add_business("business@acme.example")
+        world.add_provider(name="sendlib-test")
+        service = world.service(_Handler(200))
+        with pytest.raises(NotificationSafetyError):
+            service.send_test_email("business@acme.example", "test", "[TEST] body")
+        world.set_test_mode(False)
+        with pytest.raises(NotificationSafetyError):
+            service.send_test_email("dev-test@opex.example", "test", "[TEST] body")
+
     def test_dev_only_with_prefix_and_persisted_artefacts(self, world) -> None:
         world.add_dev("dev@opex.example")
         world.add_business("biz@acme.example")  # must NOT be routed while Test Mode is ON
@@ -592,9 +639,7 @@ class TestPossibleDuplicate:
         def timeout_handler(request):
             raise httpx2.ReadError("connection reset before response")
 
-        service = world.service(
-            timeout_handler, retry_policy=MailRetryPolicy(attempts=1)
-        )
+        service = world.service(timeout_handler, retry_policy=MailRetryPolicy(attempts=1))
         assert service.notify_tender(tender.id, verdict.id).status == "pending_retry"
         first_retry = service.flush_pending_retry()
         assert first_retry.attempted == 1

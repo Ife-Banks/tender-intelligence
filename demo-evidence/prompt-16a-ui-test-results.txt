@@ -1,0 +1,36 @@
+Prompt 16A offline UI verification results
+Date: 2026-09-25
+
+Syntax checks:
+- node --check src/tender_intelligence/admin/static/app.mjs: PASS
+- node --check src/tender_intelligence/admin/static/api.mjs: PASS
+- node --check src/tender_intelligence/admin/static/fixtures.mjs: PASS
+- node --check tests/ui/serve.mjs: PASS
+
+Automated UI tests:
+- Command: node --test tests/ui/*.test.mjs
+- Tests: 16
+- Passed: 16
+- Failed: 0
+- Skipped: 0
+
+Browser smoke checks (static-only local server at 127.0.0.1:4173):
+- Ten route renderers (health, sources, tenders, knowledge-base, llm, recipients, mail, triage, settings, audit): PASS
+- Empty fixture scenario: PASS; source table shows 0 records and base fixture is not mutated
+- Simulated server error: PASS; safe fixture error shown with retry affordance
+- Viewer preview: PASS; Knowledge Base and Audit navigation hidden; recipient addresses hidden
+- Simulated test email: PASS; native confirmation and result state both state that no email was sent
+- Test Mode OFF confirmation: PASS; action requires confirmation and local preview explicitly discloses that it changes only in-memory fixture data; cancelling restores the checkbox and leaves Test Mode ON
+- Keyboard entry: PASS; Tab focuses skip link, then home navigation link
+- External HTTP/API/provider/site/mail interactions: NONE
+
+Safety checks:
+- UI fetch usage: none
+- Browser storage: none
+- API token/auth connection controls: none
+- KB file bytes read/uploaded: none
+- Real recipients or credentials in fixtures: none
+- Actual provider test/email/source crawl: none
+
+Result:
+PROMPT 16A: IMPLEMENTED — READY FOR INDEPENDENT UI VERIFICATION

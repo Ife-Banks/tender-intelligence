@@ -1,0 +1,30 @@
+Prompt 16A independent verification — 2026-09-25
+
+Baseline commit: 6bac53b08cab57ce27b409a3deb6a0b138826482
+No implementation/backend files modified. Prompt 16B code was already present and excluded from 16A ownership assessment.
+
+Commands:
+1) node --test tests/ui/*.test.mjs
+   24 passed, 0 failed (includes current Prompt 16B client tests).
+
+2) .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16a-verify tests/integration/test_admin_api_prompt15.py tests/integration/test_admin_ui_api_prompt16b.py
+   22 passed, 0 failed (Prompt 15 / 16B API suites; not 16A behavior).
+
+3) .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16a-full
+   622 collected; 621 passed, 1 failed.
+   Failure: tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt
+   Failure is in WAHO deadline parsing, outside UI ownership and unchanged by this verification.
+
+Browser checks:
+- Started `node tests/ui/serve.mjs` (static-only server at http://127.0.0.1:4173/admin/).
+- All ten screen routes rendered title/content in offline fixture mode.
+- Exercised Empty data and Server error scenarios; empty state and safe error/retry state displayed.
+- Confirmed visible OFFLINE PREVIEW and TEST MODE ON indicators.
+- Screenshot reviewed at approximately 817 CSS px viewport width.
+- Keyboard tab focus observed on a visible control.
+- No source website, provider, LLM, or mail service was contacted; no mail was sent.
+- Browser CUA did not expose viewport resizing or captured console logs. Tablet/mobile render and direct console review remain unverified.
+
+Current Prompt 16B integration is present. Fixture-mode KB/mail copy inconsistencies were noted as Prompt 16B-owned; no live side effect was invoked.
+
+PROMPT 16A: NEEDS FIXES — DO NOT START PROMPT 16B

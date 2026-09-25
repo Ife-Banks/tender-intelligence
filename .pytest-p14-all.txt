@@ -1,0 +1,485 @@
+........................................................................ [ 12%]
+........................................F............................... [ 24%]
+........................................................................ [ 36%]
+........................................................................ [ 48%]
+..............................................F......................... [ 60%]
+........................................................................ [ 72%]
+........................................................................ [ 85%]
+........................................................................ [ 97%]
+................                                                         [100%]
+================================== FAILURES ===================================
+_______ test_a_run_is_traceable_from_row_to_stage_to_tender_to_document _______
+
+session_factory_gr = sessionmaker(class_='Session', bind=Engine(sqlite://), autoflush=False, expire_on_commit=False)
+tmp_path = WindowsPath('C:/Users/ifeol/Desktop/Projects/tender-intelligence/.pytest-p14-all/test_a_run_is_traceable_from_r0')
+
+    def test_a_run_is_traceable_from_row_to_stage_to_tender_to_document(
+        session_factory_gr, tmp_path
+    ) -> None:
+        """\xa719 K \u2014 trace RunHistory \u2192 stage \u2192 tender \u2192 document without relying on timestamps."""
+        harness = build_harness(session_factory_gr, tmp_path, ocr=StubOcrEngine())
+        source_id = harness.seed_source()
+        harness.ensure_settings()
+    
+        report = harness.coordinator.run_source(source_id)
+    
+        # Run \u2192 row, by correlation, not by time.
+        with session_factory_gr() as session:
+            run = session.scalars(
+                select(RunHistory).where(RunHistory.correlation_id == report.correlation_id)
+            ).one()
+        assert run.id == report.run_history_id
+        assert run.source_id == source_id
+    
+        # Row \u2192 stages, via the persisted map.
+        assert run.stages is not None
+        for stage in STAGE_ORDER:
+>           assert run.stages[stage.value] == StageStatus.COMPLETED.value
+E           AssertionError: assert 'SKIPPED_NOT_IMPLEMENTED' == 'COMPLETED'
+E             
+E             - COMPLETED
+E             + SKIPPED_NOT_IMPLEMENTED
+
+tests\integration\test_orchestrator_pipeline.py:294: AssertionError
+---------------------------- Captured stdout setup ----------------------------
+{"ts":"2026-09-24T23:21:15+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Context impl SQLiteImpl."}
+{"ts":"2026-09-24T23:21:15+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Will assume non-transactional DDL."}
+{"ts":"2026-09-24T23:21:15+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Running upgrade  -> 0001_initial, Add all confirmed entities (docs/03 \u00a73.1, v1.1 \u00a77)."}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Running upgrade 0001_initial -> 0002_run_history_counts, Extend run_history with prompt-05 counts and run correlation ID (docs/03 \u00a73.2)."}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Running upgrade 0002_run_history_counts -> 0003_documents_checksum_nullable, Relax documents.checksum to nullable (docs/03 \u00a73.2, prompt 06 \u00a77)."}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Running upgrade 0003_documents_checksum_nullable -> 0004_run_history_stage_state, run_history: record the per-stage outcome of an orchestrated run"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Running upgrade 0004_run_history_stage_state -> 0005_notif_dedupe_trace, notification delivery: correlation traceability + the unique dedupe index"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Running upgrade 0005_notif_dedupe_trace -> 0006_mail_breaker_count, mail circuit breaker: persist the consecutive-failure counter"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Running upgrade 0006_mail_breaker_count -> 0007_notif_outbox_lifecycle, notification outbox lifecycle and attempt metadata"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Running upgrade 0007_notif_outbox_lifecycle -> 0008_notif_attempt_provider, preserve provider identity on notification attempts"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Running upgrade 0008_notif_attempt_provider -> 0009_provider_usage, durable provider rate-limit accounting"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Running upgrade 0009_provider_usage -> 0010_deadline_resolution, Deadline resolution provenance \u2014 separate table (Prompt 12.1)."}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Running upgrade 0010_deadline_resolution -> 0011_triage_results, Persist Stage A triage decisions."}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"alembic.runtime.migration","message":"Running upgrade 0011_triage_results -> 0012_verdict_stage_b, Stage B provenance and deadline source timezone."}
+----------------------------- Captured log setup ------------------------------
+INFO     alembic.runtime.migration:migration.py:205 Context impl SQLiteImpl.
+INFO     alembic.runtime.migration:migration.py:208 Will assume non-transactional DDL.
+INFO     alembic.runtime.migration:migration.py:611 Running upgrade  -> 0001_initial, Add all confirmed entities (docs/03 �3.1, v1.1 �7).
+INFO     alembic.runtime.migration:migration.py:611 Running upgrade 0001_initial -> 0002_run_history_counts, Extend run_history with prompt-05 counts and run correlation ID (docs/03 �3.2).
+INFO     alembic.runtime.migration:migration.py:611 Running upgrade 0002_run_history_counts -> 0003_documents_checksum_nullable, Relax documents.checksum to nullable (docs/03 �3.2, prompt 06 �7).
+INFO     alembic.runtime.migration:migration.py:611 Running upgrade 0003_documents_checksum_nullable -> 0004_run_history_stage_state, run_history: record the per-stage outcome of an orchestrated run
+INFO     alembic.runtime.migration:migration.py:611 Running upgrade 0004_run_history_stage_state -> 0005_notif_dedupe_trace, notification delivery: correlation traceability + the unique dedupe index
+INFO     alembic.runtime.migration:migration.py:611 Running upgrade 0005_notif_dedupe_trace -> 0006_mail_breaker_count, mail circuit breaker: persist the consecutive-failure counter
+INFO     alembic.runtime.migration:migration.py:611 Running upgrade 0006_mail_breaker_count -> 0007_notif_outbox_lifecycle, notification outbox lifecycle and attempt metadata
+INFO     alembic.runtime.migration:migration.py:611 Running upgrade 0007_notif_outbox_lifecycle -> 0008_notif_attempt_provider, preserve provider identity on notification attempts
+INFO     alembic.runtime.migration:migration.py:611 Running upgrade 0008_notif_attempt_provider -> 0009_provider_usage, durable provider rate-limit accounting
+INFO     alembic.runtime.migration:migration.py:611 Running upgrade 0009_provider_usage -> 0010_deadline_resolution, Deadline resolution provenance � separate table (Prompt 12.1).
+INFO     alembic.runtime.migration:migration.py:611 Running upgrade 0010_deadline_resolution -> 0011_triage_results, Persist Stage A triage decisions.
+INFO     alembic.runtime.migration:migration.py:611 Running upgrade 0011_triage_results -> 0012_verdict_stage_b, Stage B provenance and deadline source timezone.
+---------------------------- Captured stdout call -----------------------------
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.coordinator","message":"run starting for source wahoo","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"run","status":"start"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"04-discovery start: stage started","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"04-discovery","status":"start"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.sources.waho","message":"fetching listing page https://data.wahooas.org/tenders/tenders/list","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"discovery","status":"fetch"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/robots.txt \"HTTP/1.1 200 OK\"","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/tenders/tenders/list \"HTTP/1.1 200 OK\"","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.sources.waho","message":"fetching listing page https://data.wahooas.org/tenders/tenders/list?page=2","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"discovery","status":"fetch"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/tenders/tenders/list?page=2 \"HTTP/1.1 200 OK\"","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.sources.waho","message":"discovery complete: 3 candidates from 2 page(s)","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"discovery","status":"done"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"04-discovery done: adapter WahoPaginatedAdapter returned 3 listing(s)","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"04-discovery","status":"COMPLETED"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"05-dedup start: stage started","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"05-dedup","status":"start"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.dedup","message":"dedup complete: 3 new, 0 update, 0 unchanged, 0 duplicate(s)","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"dedup","status":"done"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"05-dedup done: 3 new, 0 update, 0 unchanged, 0 duplicate","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"05-dedup","status":"COMPLETED"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"06-persistence start: stage started","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"06-persistence","status":"start"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"06-persistence done: realised inside stage 05's transaction (claim_new/apply_update); 3 tender row(s) written","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"06-persistence","status":"COMPLETED"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"07-detail-document-discovery start: stage started","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"07-detail-document-discovery","status":"start"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.sources.waho","message":"fetching detail page for tender 165","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"discovery","status":"fetch"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/tenders/tenders/165/list \"HTTP/1.1 200 OK\"","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.sources.waho","message":"detail discovery complete for tender 165","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"discovery","status":"done"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.deadline.service","message":"deadline resolved from detail page: 2026-09-24 13:00:00+00:00 (GMT)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"deadline_resolution","status":"resolved"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.coordinator","message":"deadline resolution complete: resolved (detail_page)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"deadline_resolution","status":"resolved"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.sources.waho","message":"fetching detail page for tender 166","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"discovery","status":"fetch"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/tenders/tenders/166/list \"HTTP/1.1 200 OK\"","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.sources.waho","message":"detail discovery complete for tender 166","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"discovery","status":"done"}
+{"ts":"2026-09-24T23:21:16+0100","level":"WARNING","logger":"tender_intelligence.deadline.service","message":"conflicting deadlines from listing (2026-10-15 16:00:00+00:00) and detail (2026-09-24 13:00:00+00:00)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"deadline_resolution","status":"conflict"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.coordinator","message":"deadline resolution complete: conflicting (conflicting)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"deadline_resolution","status":"conflicting"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.sources.waho","message":"fetching detail page for tender 167","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"discovery","status":"fetch"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/tenders/tenders/167/list \"HTTP/1.1 200 OK\"","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.sources.waho","message":"detail discovery complete for tender 167","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"discovery","status":"done"}
+{"ts":"2026-09-24T23:21:16+0100","level":"WARNING","logger":"tender_intelligence.deadline.service","message":"conflicting deadlines from listing (2026-09-24 12:00:00+00:00) and detail (2026-09-24 13:00:00+00:00)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"deadline_resolution","status":"conflict"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.coordinator","message":"deadline resolution complete: conflicting (conflicting)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"deadline_resolution","status":"conflicting"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"07-detail-document-discovery done: 24 attachment(s) across 3 tender(s); 1 deadline(s) resolved, 2 unresolved","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"07-detail-document-discovery","status":"COMPLETED"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"08-acquisition start: stage started","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"08-acquisition","status":"start"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/rfp_p-z1-bz0-012_c_en.pdf \"HTTP/1.1 200 OK\"","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1259 bytes, application/pdf)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:16+0100","level":"WARNING","logger":"tender_intelligence.acquisition.service","message":"advertised size (1258291) and actual size (1259) differ beyond tolerance","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"warning"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1259 bytes, 4465846bacbb1ebd3c3f40a7fa738325c3c798b2e8addde65fbefd9c4a7b7065)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/tor_p-z1-bz0-012_c_en.docx \"HTTP/1.1 200 OK\"","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (35817 bytes, application/vnd.openxmlformats-officedocument.wordprocessingml.document)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (35817 bytes, ab1e084a6f1ce690c5db2885e74693c8c01766a122ce9eed5d199ee23affd430)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:16+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1738 bytes, 66c84fb7a6aa3c4ead49f895e4a7044df1fb57de1ed76d09b2686e91f5bed5b4)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (734 bytes, a9ae57efe9186f07d48303bcac5d54c7e359bf3f503939c03ad2954e5c59a5c4)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (721 bytes, d14be8284e406d14dc2a576b19f15e7f637b955f9e27a3d9ed871ec99606f7ba)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1132 bytes, be664981c3141cddfc59362beb287ebf20d0773660e2dd6faac5968a5930a081)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (4044 bytes, 40f002745f4d797fe1adf604712bebaa4f51339c9976c260b48d4fdc9f58266a)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1227 bytes, 1e7f0eb144a98e199249314f61ff32a8de2a27e56d8e9ee6b524e1c6b235d377)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (349458 bytes, 02d71a68ddb92c055e84526d6a9e45700be3872781ababf759241694bc30e384)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (438131 bytes, 463ae0928cf0d84775dbf8cf18d6c3029f6707c81bf590f6d6dd8757a5e93f15)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (2535 bytes, 51a0d348fe85965c66e4748a03c3c0d055d78455514f03cb121c334af7d73689)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (438 bytes, 349d36de7434d09f86987ff671d8814964a0588c1e630c06e562cda7e75e9f95)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (2811 bytes, 79385fb7f60247507ecaffc292e9ebd52ea0657b8634f629ba6fccc54011d6bb)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (10939 bytes, e3a8ab7db9ca7afca56f5f2820a56e8b660016c647773555b060b0a02ac76941)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (262 bytes, a86086ffc5d8e83ebd6c71a55d1d2efaa31b137977f5f3a752366e1023612144)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (295 bytes, 1ca6c9a64edcebe24ee703a54403611b322d96da33371779e742d2d3f7ed7a6c)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (354 bytes, c542307b13ec29a8b546217bb37936ab4822e044b265d2952985ec3d6afed24e)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (5513 bytes, 70976f19cbcd896e51890859fe6ecb3467a5a7ad0c040160fedc5a1993cb09ce)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (8324 bytes, 96367138dc44ce09bf2c8f0f8e49348a1478d2c5c0af69bbc2bbc38b63cdcead)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/budget_template_en.xlsx \"HTTP/1.1 200 OK\"","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1608 bytes, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1608 bytes, f3c789a4ea079fe3cca091e86e8574b50a3a1b2579f72a962d2f34bfc90ef7a9)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (564 bytes, f5ad3005c1965f229ffa7dcd237b06be3cad678499371287d54448ad6e4d6f19)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (299 bytes, c596984701ca0ac9d22e04ee194b91c9ba97b45876155652acddd85ff7d516c3)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (287 bytes, a3d163967993e843d374a16292b850087d36c13354836bf0c95b22bfbb2b5476)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (300 bytes, f06e8a4c0afb7225770f55b41ffb9e0d6dc071031bbe0118ad261ec5170e5003)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (257 bytes, 243a5acdb4da3d721fd0d1a1b956d164b304ae18b3eac8b287ae0a7643924669)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/annexes_p-z1-bz0-012_c_en.zip \"HTTP/1.1 200 OK\"","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1304 bytes, application/zip)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:17+0100","level":"WARNING","logger":"tender_intelligence.acquisition.service","message":"advertised size (3565158) and actual size (1304) differ beyond tolerance","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"warning"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1304 bytes, 665e1972cb467485d7fef5531a52c89f04219d69ee86e8e9844cc9f50989502b)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1262 bytes, 1a52f0793ad4b27aff120670f9c540aceae5ea338963731fc629e63f1b6500cd)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (50 bytes, d35da8ad8ceb95776d3c30bfe81e5431a7883a29eb7a823e63bda6031ee2c30c)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/supporting_data.hwb \"HTTP/1.1 200 OK\"","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (48 bytes, application/octet-stream)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (48 bytes, 869834d75406d34eb4d1935103eaa710e89e358866b36cffd78df9e41cdd267e)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/en/Annexe%201.pdf \"HTTP/1.1 200 OK\"","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1244 bytes, application/pdf)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1244 bytes, ad6704421968d3c449940272f6298057d47200aea9fa9d081c6e78f33a96efc0)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/fr/Annexe%201.pdf \"HTTP/1.1 200 OK\"","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13"}
+{"ts":"2026-09-24T23:21:17+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1244 bytes, application/pdf)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1244 bytes, 4126ccaea6d3e1be5ac31c08ce6214090fcb991bd2d4c80974d5d6c62e68a524)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/download?id=4128 \"HTTP/1.1 200 OK\"","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (37 bytes, application/octet-stream)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (37 bytes, f183a0dc9c3e0d30f9e782d56829f3988d3842e8947b980f71ffec6b5991c9fc)","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"acquisition complete: 32 acquired, 0 failed","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"acquisition","status":"complete"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/rfp_p-z1-bz0-012_c_en.pdf \"HTTP/1.1 200 OK\"","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1259 bytes, application/pdf)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:18+0100","level":"WARNING","logger":"tender_intelligence.acquisition.service","message":"advertised size (1258291) and actual size (1259) differ beyond tolerance","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"warning"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1259 bytes, 4465846bacbb1ebd3c3f40a7fa738325c3c798b2e8addde65fbefd9c4a7b7065)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/tor_p-z1-bz0-012_c_en.docx \"HTTP/1.1 200 OK\"","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (35817 bytes, application/vnd.openxmlformats-officedocument.wordprocessingml.document)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (35817 bytes, ab1e084a6f1ce690c5db2885e74693c8c01766a122ce9eed5d199ee23affd430)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1738 bytes, 66c84fb7a6aa3c4ead49f895e4a7044df1fb57de1ed76d09b2686e91f5bed5b4)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (734 bytes, a9ae57efe9186f07d48303bcac5d54c7e359bf3f503939c03ad2954e5c59a5c4)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (721 bytes, d14be8284e406d14dc2a576b19f15e7f637b955f9e27a3d9ed871ec99606f7ba)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1132 bytes, be664981c3141cddfc59362beb287ebf20d0773660e2dd6faac5968a5930a081)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (4044 bytes, 40f002745f4d797fe1adf604712bebaa4f51339c9976c260b48d4fdc9f58266a)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1227 bytes, 1e7f0eb144a98e199249314f61ff32a8de2a27e56d8e9ee6b524e1c6b235d377)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (349458 bytes, 02d71a68ddb92c055e84526d6a9e45700be3872781ababf759241694bc30e384)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (438131 bytes, 463ae0928cf0d84775dbf8cf18d6c3029f6707c81bf590f6d6dd8757a5e93f15)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (2535 bytes, 51a0d348fe85965c66e4748a03c3c0d055d78455514f03cb121c334af7d73689)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (438 bytes, 349d36de7434d09f86987ff671d8814964a0588c1e630c06e562cda7e75e9f95)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (2811 bytes, 79385fb7f60247507ecaffc292e9ebd52ea0657b8634f629ba6fccc54011d6bb)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (10939 bytes, e3a8ab7db9ca7afca56f5f2820a56e8b660016c647773555b060b0a02ac76941)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (262 bytes, a86086ffc5d8e83ebd6c71a55d1d2efaa31b137977f5f3a752366e1023612144)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (295 bytes, 1ca6c9a64edcebe24ee703a54403611b322d96da33371779e742d2d3f7ed7a6c)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (354 bytes, c542307b13ec29a8b546217bb37936ab4822e044b265d2952985ec3d6afed24e)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (5513 bytes, 70976f19cbcd896e51890859fe6ecb3467a5a7ad0c040160fedc5a1993cb09ce)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (8324 bytes, 96367138dc44ce09bf2c8f0f8e49348a1478d2c5c0af69bbc2bbc38b63cdcead)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/budget_template_en.xlsx \"HTTP/1.1 200 OK\"","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1608 bytes, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1608 bytes, f3c789a4ea079fe3cca091e86e8574b50a3a1b2579f72a962d2f34bfc90ef7a9)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (564 bytes, f5ad3005c1965f229ffa7dcd237b06be3cad678499371287d54448ad6e4d6f19)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (299 bytes, c596984701ca0ac9d22e04ee194b91c9ba97b45876155652acddd85ff7d516c3)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (287 bytes, a3d163967993e843d374a16292b850087d36c13354836bf0c95b22bfbb2b5476)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (300 bytes, f06e8a4c0afb7225770f55b41ffb9e0d6dc071031bbe0118ad261ec5170e5003)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (257 bytes, 243a5acdb4da3d721fd0d1a1b956d164b304ae18b3eac8b287ae0a7643924669)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/annexes_p-z1-bz0-012_c_en.zip \"HTTP/1.1 200 OK\"","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4"}
+{"ts":"2026-09-24T23:21:18+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1304 bytes, application/zip)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:18+0100","level":"WARNING","logger":"tender_intelligence.acquisition.service","message":"advertised size (3565158) and actual size (1304) differ beyond tolerance","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"warning"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1304 bytes, 665e1972cb467485d7fef5531a52c89f04219d69ee86e8e9844cc9f50989502b)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1262 bytes, 1a52f0793ad4b27aff120670f9c540aceae5ea338963731fc629e63f1b6500cd)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (50 bytes, d35da8ad8ceb95776d3c30bfe81e5431a7883a29eb7a823e63bda6031ee2c30c)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/supporting_data.hwb \"HTTP/1.1 200 OK\"","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (48 bytes, application/octet-stream)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (48 bytes, 869834d75406d34eb4d1935103eaa710e89e358866b36cffd78df9e41cdd267e)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/en/Annexe%201.pdf \"HTTP/1.1 200 OK\"","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1244 bytes, application/pdf)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1244 bytes, ad6704421968d3c449940272f6298057d47200aea9fa9d081c6e78f33a96efc0)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/fr/Annexe%201.pdf \"HTTP/1.1 200 OK\"","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1244 bytes, application/pdf)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1244 bytes, 4126ccaea6d3e1be5ac31c08ce6214090fcb991bd2d4c80974d5d6c62e68a524)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/download?id=4128 \"HTTP/1.1 200 OK\"","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (37 bytes, application/octet-stream)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (37 bytes, f183a0dc9c3e0d30f9e782d56829f3988d3842e8947b980f71ffec6b5991c9fc)","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"acquisition complete: 32 acquired, 0 failed","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"acquisition","status":"complete"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/rfp_p-z1-bz0-012_c_en.pdf \"HTTP/1.1 200 OK\"","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1259 bytes, application/pdf)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:19+0100","level":"WARNING","logger":"tender_intelligence.acquisition.service","message":"advertised size (1258291) and actual size (1259) differ beyond tolerance","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"warning"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1259 bytes, 4465846bacbb1ebd3c3f40a7fa738325c3c798b2e8addde65fbefd9c4a7b7065)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/tor_p-z1-bz0-012_c_en.docx \"HTTP/1.1 200 OK\"","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (35817 bytes, application/vnd.openxmlformats-officedocument.wordprocessingml.document)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (35817 bytes, ab1e084a6f1ce690c5db2885e74693c8c01766a122ce9eed5d199ee23affd430)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1738 bytes, 66c84fb7a6aa3c4ead49f895e4a7044df1fb57de1ed76d09b2686e91f5bed5b4)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (734 bytes, a9ae57efe9186f07d48303bcac5d54c7e359bf3f503939c03ad2954e5c59a5c4)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (721 bytes, d14be8284e406d14dc2a576b19f15e7f637b955f9e27a3d9ed871ec99606f7ba)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1132 bytes, be664981c3141cddfc59362beb287ebf20d0773660e2dd6faac5968a5930a081)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (4044 bytes, 40f002745f4d797fe1adf604712bebaa4f51339c9976c260b48d4fdc9f58266a)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1227 bytes, 1e7f0eb144a98e199249314f61ff32a8de2a27e56d8e9ee6b524e1c6b235d377)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (349458 bytes, 02d71a68ddb92c055e84526d6a9e45700be3872781ababf759241694bc30e384)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (438131 bytes, 463ae0928cf0d84775dbf8cf18d6c3029f6707c81bf590f6d6dd8757a5e93f15)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (2535 bytes, 51a0d348fe85965c66e4748a03c3c0d055d78455514f03cb121c334af7d73689)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (438 bytes, 349d36de7434d09f86987ff671d8814964a0588c1e630c06e562cda7e75e9f95)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (2811 bytes, 79385fb7f60247507ecaffc292e9ebd52ea0657b8634f629ba6fccc54011d6bb)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (10939 bytes, e3a8ab7db9ca7afca56f5f2820a56e8b660016c647773555b060b0a02ac76941)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (262 bytes, a86086ffc5d8e83ebd6c71a55d1d2efaa31b137977f5f3a752366e1023612144)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (295 bytes, 1ca6c9a64edcebe24ee703a54403611b322d96da33371779e742d2d3f7ed7a6c)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (354 bytes, c542307b13ec29a8b546217bb37936ab4822e044b265d2952985ec3d6afed24e)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (5513 bytes, 70976f19cbcd896e51890859fe6ecb3467a5a7ad0c040160fedc5a1993cb09ce)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (8324 bytes, 96367138dc44ce09bf2c8f0f8e49348a1478d2c5c0af69bbc2bbc38b63cdcead)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/budget_template_en.xlsx \"HTTP/1.1 200 OK\"","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1608 bytes, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1608 bytes, f3c789a4ea079fe3cca091e86e8574b50a3a1b2579f72a962d2f34bfc90ef7a9)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (564 bytes, f5ad3005c1965f229ffa7dcd237b06be3cad678499371287d54448ad6e4d6f19)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (299 bytes, c596984701ca0ac9d22e04ee194b91c9ba97b45876155652acddd85ff7d516c3)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (287 bytes, a3d163967993e843d374a16292b850087d36c13354836bf0c95b22bfbb2b5476)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (300 bytes, f06e8a4c0afb7225770f55b41ffb9e0d6dc071031bbe0118ad261ec5170e5003)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (257 bytes, 243a5acdb4da3d721fd0d1a1b956d164b304ae18b3eac8b287ae0a7643924669)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/annexes_p-z1-bz0-012_c_en.zip \"HTTP/1.1 200 OK\"","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1"}
+{"ts":"2026-09-24T23:21:19+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1304 bytes, application/zip)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:19+0100","level":"WARNING","logger":"tender_intelligence.acquisition.service","message":"advertised size (3565158) and actual size (1304) differ beyond tolerance","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"warning"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1304 bytes, 665e1972cb467485d7fef5531a52c89f04219d69ee86e8e9844cc9f50989502b)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1262 bytes, 1a52f0793ad4b27aff120670f9c540aceae5ea338963731fc629e63f1b6500cd)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (50 bytes, d35da8ad8ceb95776d3c30bfe81e5431a7883a29eb7a823e63bda6031ee2c30c)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/supporting_data.hwb \"HTTP/1.1 200 OK\"","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (48 bytes, application/octet-stream)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (48 bytes, 869834d75406d34eb4d1935103eaa710e89e358866b36cffd78df9e41cdd267e)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/en/Annexe%201.pdf \"HTTP/1.1 200 OK\"","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1244 bytes, application/pdf)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1244 bytes, ad6704421968d3c449940272f6298057d47200aea9fa9d081c6e78f33a96efc0)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/fr/Annexe%201.pdf \"HTTP/1.1 200 OK\"","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (1244 bytes, application/pdf)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (1244 bytes, 4126ccaea6d3e1be5ac31c08ce6214090fcb991bd2d4c80974d5d6c62e68a524)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"httpx2","message":"HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/download?id=4128 \"HTTP/1.1 200 OK\"","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.acquisition.fetcher","message":"document fetched (37 bytes, application/octet-stream)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"fetched"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"document acquired (37 bytes, f183a0dc9c3e0d30f9e782d56829f3988d3842e8947b980f71ffec6b5991c9fc)","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"downloaded"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.acquisition.service","message":"acquisition complete: 32 acquired, 0 failed","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"acquisition","status":"complete"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"08-acquisition done: 96 document(s) acquired for 3 tender(s); 0 attachment failure(s), 3 acquisition attempt(s)","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"08-acquisition","status":"COMPLETED"}
+{"ts":"2026-09-24T23:21:20+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"09-processing start: stage started","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"09-processing","status":"start"}
+{"ts":"2026-09-24T23:21:22+0100","level":"INFO","logger":"tender_intelligence.processing.service","message":"tender document bundle built","correlation_id":"6c51c2d2-44bf-48e7-83ad-6c2c7c733f13","stage":"processing","status":"bundle_complete"}
+{"ts":"2026-09-24T23:21:25+0100","level":"INFO","logger":"tender_intelligence.processing.service","message":"tender document bundle built","correlation_id":"9cd14641-9531-4d4f-9cfd-9cf33f6927a4","stage":"processing","status":"bundle_complete"}
+{"ts":"2026-09-24T23:21:29+0100","level":"INFO","logger":"tender_intelligence.processing.service","message":"tender document bundle built","correlation_id":"ad24153b-e7b1-43ce-91b5-0da8826fc3c1","stage":"processing","status":"bundle_complete"}
+{"ts":"2026-09-24T23:21:29+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"09-processing done: 96 document(s) across 3 tender(s); 3 complete bundle(s), 0 incomplete, 0 tender-level failure(s)","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"09-processing","status":"COMPLETED"}
+{"ts":"2026-09-24T23:21:29+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"13-triage start: stage started","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"13-triage","status":"start"}
+{"ts":"2026-09-24T23:21:29+0100","level":"INFO","logger":"tender_intelligence.orchestrator.stages","message":"13-triage done: 3 passed, 0 discarded, 0 failed across 3 tender(s)","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"13-triage","status":"COMPLETED"}
+{"ts":"2026-09-24T23:21:29+0100","level":"INFO","logger":"tender_intelligence.orchestrator.coordinator","message":"run finished: COMPLETED","correlation_id":"88d5f68f-bc9c-4781-9c5d-b639190fb8e2","stage":"run","status":"COMPLETED"}
+------------------------------ Captured log call ------------------------------
+INFO     tender_intelligence.orchestrator.coordinator:coordinator.py:254 run starting for source wahoo
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 04-discovery start: stage started
+INFO     tender_intelligence.sources.waho:waho.py:328 fetching listing page https://data.wahooas.org/tenders/tenders/list
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/robots.txt "HTTP/1.1 200 OK"
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/tenders/tenders/list "HTTP/1.1 200 OK"
+INFO     tender_intelligence.sources.waho:waho.py:328 fetching listing page https://data.wahooas.org/tenders/tenders/list?page=2
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/tenders/tenders/list?page=2 "HTTP/1.1 200 OK"
+INFO     tender_intelligence.sources.waho:waho.py:352 discovery complete: 3 candidates from 2 page(s)
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 04-discovery done: adapter WahoPaginatedAdapter returned 3 listing(s)
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 05-dedup start: stage started
+INFO     tender_intelligence.dedup:service.py:184 dedup complete: 3 new, 0 update, 0 unchanged, 0 duplicate(s)
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 05-dedup done: 3 new, 0 update, 0 unchanged, 0 duplicate
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 06-persistence start: stage started
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 06-persistence done: realised inside stage 05's transaction (claim_new/apply_update); 3 tender row(s) written
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 07-detail-document-discovery start: stage started
+INFO     tender_intelligence.sources.waho:waho.py:583 fetching detail page for tender 165
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/tenders/tenders/165/list "HTTP/1.1 200 OK"
+INFO     tender_intelligence.sources.waho:waho.py:590 detail discovery complete for tender 165
+INFO     tender_intelligence.deadline.service:service.py:189 deadline resolved from detail page: 2026-09-24 13:00:00+00:00 (GMT)
+INFO     tender_intelligence.orchestrator.coordinator:coordinator.py:597 deadline resolution complete: resolved (detail_page)
+INFO     tender_intelligence.sources.waho:waho.py:583 fetching detail page for tender 166
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/tenders/tenders/166/list "HTTP/1.1 200 OK"
+INFO     tender_intelligence.sources.waho:waho.py:590 detail discovery complete for tender 166
+WARNING  tender_intelligence.deadline.service:service.py:165 conflicting deadlines from listing (2026-10-15 16:00:00+00:00) and detail (2026-09-24 13:00:00+00:00)
+INFO     tender_intelligence.orchestrator.coordinator:coordinator.py:597 deadline resolution complete: conflicting (conflicting)
+INFO     tender_intelligence.sources.waho:waho.py:583 fetching detail page for tender 167
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/tenders/tenders/167/list "HTTP/1.1 200 OK"
+INFO     tender_intelligence.sources.waho:waho.py:590 detail discovery complete for tender 167
+WARNING  tender_intelligence.deadline.service:service.py:165 conflicting deadlines from listing (2026-09-24 12:00:00+00:00) and detail (2026-09-24 13:00:00+00:00)
+INFO     tender_intelligence.orchestrator.coordinator:coordinator.py:597 deadline resolution complete: conflicting (conflicting)
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 07-detail-document-discovery done: 24 attachment(s) across 3 tender(s); 1 deadline(s) resolved, 2 unresolved
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 08-acquisition start: stage started
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/rfp_p-z1-bz0-012_c_en.pdf "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1259 bytes, application/pdf)
+WARNING  tender_intelligence.acquisition.service:service.py:489 advertised size (1258291) and actual size (1259) differ beyond tolerance
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1259 bytes, 4465846bacbb1ebd3c3f40a7fa738325c3c798b2e8addde65fbefd9c4a7b7065)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/tor_p-z1-bz0-012_c_en.docx "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (35817 bytes, application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (35817 bytes, ab1e084a6f1ce690c5db2885e74693c8c01766a122ce9eed5d199ee23affd430)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1738 bytes, 66c84fb7a6aa3c4ead49f895e4a7044df1fb57de1ed76d09b2686e91f5bed5b4)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (734 bytes, a9ae57efe9186f07d48303bcac5d54c7e359bf3f503939c03ad2954e5c59a5c4)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (721 bytes, d14be8284e406d14dc2a576b19f15e7f637b955f9e27a3d9ed871ec99606f7ba)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1132 bytes, be664981c3141cddfc59362beb287ebf20d0773660e2dd6faac5968a5930a081)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (4044 bytes, 40f002745f4d797fe1adf604712bebaa4f51339c9976c260b48d4fdc9f58266a)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1227 bytes, 1e7f0eb144a98e199249314f61ff32a8de2a27e56d8e9ee6b524e1c6b235d377)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (349458 bytes, 02d71a68ddb92c055e84526d6a9e45700be3872781ababf759241694bc30e384)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (438131 bytes, 463ae0928cf0d84775dbf8cf18d6c3029f6707c81bf590f6d6dd8757a5e93f15)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (2535 bytes, 51a0d348fe85965c66e4748a03c3c0d055d78455514f03cb121c334af7d73689)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (438 bytes, 349d36de7434d09f86987ff671d8814964a0588c1e630c06e562cda7e75e9f95)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (2811 bytes, 79385fb7f60247507ecaffc292e9ebd52ea0657b8634f629ba6fccc54011d6bb)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (10939 bytes, e3a8ab7db9ca7afca56f5f2820a56e8b660016c647773555b060b0a02ac76941)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (262 bytes, a86086ffc5d8e83ebd6c71a55d1d2efaa31b137977f5f3a752366e1023612144)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (295 bytes, 1ca6c9a64edcebe24ee703a54403611b322d96da33371779e742d2d3f7ed7a6c)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (354 bytes, c542307b13ec29a8b546217bb37936ab4822e044b265d2952985ec3d6afed24e)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (5513 bytes, 70976f19cbcd896e51890859fe6ecb3467a5a7ad0c040160fedc5a1993cb09ce)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (8324 bytes, 96367138dc44ce09bf2c8f0f8e49348a1478d2c5c0af69bbc2bbc38b63cdcead)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/budget_template_en.xlsx "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1608 bytes, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1608 bytes, f3c789a4ea079fe3cca091e86e8574b50a3a1b2579f72a962d2f34bfc90ef7a9)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (564 bytes, f5ad3005c1965f229ffa7dcd237b06be3cad678499371287d54448ad6e4d6f19)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (299 bytes, c596984701ca0ac9d22e04ee194b91c9ba97b45876155652acddd85ff7d516c3)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (287 bytes, a3d163967993e843d374a16292b850087d36c13354836bf0c95b22bfbb2b5476)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (300 bytes, f06e8a4c0afb7225770f55b41ffb9e0d6dc071031bbe0118ad261ec5170e5003)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (257 bytes, 243a5acdb4da3d721fd0d1a1b956d164b304ae18b3eac8b287ae0a7643924669)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/annexes_p-z1-bz0-012_c_en.zip "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1304 bytes, application/zip)
+WARNING  tender_intelligence.acquisition.service:service.py:489 advertised size (3565158) and actual size (1304) differ beyond tolerance
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1304 bytes, 665e1972cb467485d7fef5531a52c89f04219d69ee86e8e9844cc9f50989502b)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1262 bytes, 1a52f0793ad4b27aff120670f9c540aceae5ea338963731fc629e63f1b6500cd)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (50 bytes, d35da8ad8ceb95776d3c30bfe81e5431a7883a29eb7a823e63bda6031ee2c30c)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/supporting_data.hwb "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (48 bytes, application/octet-stream)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (48 bytes, 869834d75406d34eb4d1935103eaa710e89e358866b36cffd78df9e41cdd267e)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/en/Annexe%201.pdf "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1244 bytes, application/pdf)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1244 bytes, ad6704421968d3c449940272f6298057d47200aea9fa9d081c6e78f33a96efc0)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/fr/Annexe%201.pdf "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1244 bytes, application/pdf)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1244 bytes, 4126ccaea6d3e1be5ac31c08ce6214090fcb991bd2d4c80974d5d6c62e68a524)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/download?id=4128 "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (37 bytes, application/octet-stream)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (37 bytes, f183a0dc9c3e0d30f9e782d56829f3988d3842e8947b980f71ffec6b5991c9fc)
+INFO     tender_intelligence.acquisition.service:service.py:177 acquisition complete: 32 acquired, 0 failed
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/rfp_p-z1-bz0-012_c_en.pdf "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1259 bytes, application/pdf)
+WARNING  tender_intelligence.acquisition.service:service.py:489 advertised size (1258291) and actual size (1259) differ beyond tolerance
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1259 bytes, 4465846bacbb1ebd3c3f40a7fa738325c3c798b2e8addde65fbefd9c4a7b7065)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/tor_p-z1-bz0-012_c_en.docx "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (35817 bytes, application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (35817 bytes, ab1e084a6f1ce690c5db2885e74693c8c01766a122ce9eed5d199ee23affd430)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1738 bytes, 66c84fb7a6aa3c4ead49f895e4a7044df1fb57de1ed76d09b2686e91f5bed5b4)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (734 bytes, a9ae57efe9186f07d48303bcac5d54c7e359bf3f503939c03ad2954e5c59a5c4)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (721 bytes, d14be8284e406d14dc2a576b19f15e7f637b955f9e27a3d9ed871ec99606f7ba)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1132 bytes, be664981c3141cddfc59362beb287ebf20d0773660e2dd6faac5968a5930a081)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (4044 bytes, 40f002745f4d797fe1adf604712bebaa4f51339c9976c260b48d4fdc9f58266a)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1227 bytes, 1e7f0eb144a98e199249314f61ff32a8de2a27e56d8e9ee6b524e1c6b235d377)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (349458 bytes, 02d71a68ddb92c055e84526d6a9e45700be3872781ababf759241694bc30e384)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (438131 bytes, 463ae0928cf0d84775dbf8cf18d6c3029f6707c81bf590f6d6dd8757a5e93f15)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (2535 bytes, 51a0d348fe85965c66e4748a03c3c0d055d78455514f03cb121c334af7d73689)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (438 bytes, 349d36de7434d09f86987ff671d8814964a0588c1e630c06e562cda7e75e9f95)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (2811 bytes, 79385fb7f60247507ecaffc292e9ebd52ea0657b8634f629ba6fccc54011d6bb)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (10939 bytes, e3a8ab7db9ca7afca56f5f2820a56e8b660016c647773555b060b0a02ac76941)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (262 bytes, a86086ffc5d8e83ebd6c71a55d1d2efaa31b137977f5f3a752366e1023612144)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (295 bytes, 1ca6c9a64edcebe24ee703a54403611b322d96da33371779e742d2d3f7ed7a6c)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (354 bytes, c542307b13ec29a8b546217bb37936ab4822e044b265d2952985ec3d6afed24e)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (5513 bytes, 70976f19cbcd896e51890859fe6ecb3467a5a7ad0c040160fedc5a1993cb09ce)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (8324 bytes, 96367138dc44ce09bf2c8f0f8e49348a1478d2c5c0af69bbc2bbc38b63cdcead)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/budget_template_en.xlsx "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1608 bytes, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1608 bytes, f3c789a4ea079fe3cca091e86e8574b50a3a1b2579f72a962d2f34bfc90ef7a9)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (564 bytes, f5ad3005c1965f229ffa7dcd237b06be3cad678499371287d54448ad6e4d6f19)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (299 bytes, c596984701ca0ac9d22e04ee194b91c9ba97b45876155652acddd85ff7d516c3)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (287 bytes, a3d163967993e843d374a16292b850087d36c13354836bf0c95b22bfbb2b5476)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (300 bytes, f06e8a4c0afb7225770f55b41ffb9e0d6dc071031bbe0118ad261ec5170e5003)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (257 bytes, 243a5acdb4da3d721fd0d1a1b956d164b304ae18b3eac8b287ae0a7643924669)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/annexes_p-z1-bz0-012_c_en.zip "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1304 bytes, application/zip)
+WARNING  tender_intelligence.acquisition.service:service.py:489 advertised size (3565158) and actual size (1304) differ beyond tolerance
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1304 bytes, 665e1972cb467485d7fef5531a52c89f04219d69ee86e8e9844cc9f50989502b)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1262 bytes, 1a52f0793ad4b27aff120670f9c540aceae5ea338963731fc629e63f1b6500cd)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (50 bytes, d35da8ad8ceb95776d3c30bfe81e5431a7883a29eb7a823e63bda6031ee2c30c)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/supporting_data.hwb "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (48 bytes, application/octet-stream)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (48 bytes, 869834d75406d34eb4d1935103eaa710e89e358866b36cffd78df9e41cdd267e)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/en/Annexe%201.pdf "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1244 bytes, application/pdf)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1244 bytes, ad6704421968d3c449940272f6298057d47200aea9fa9d081c6e78f33a96efc0)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/fr/Annexe%201.pdf "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1244 bytes, application/pdf)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1244 bytes, 4126ccaea6d3e1be5ac31c08ce6214090fcb991bd2d4c80974d5d6c62e68a524)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/download?id=4128 "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (37 bytes, application/octet-stream)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (37 bytes, f183a0dc9c3e0d30f9e782d56829f3988d3842e8947b980f71ffec6b5991c9fc)
+INFO     tender_intelligence.acquisition.service:service.py:177 acquisition complete: 32 acquired, 0 failed
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/rfp_p-z1-bz0-012_c_en.pdf "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1259 bytes, application/pdf)
+WARNING  tender_intelligence.acquisition.service:service.py:489 advertised size (1258291) and actual size (1259) differ beyond tolerance
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1259 bytes, 4465846bacbb1ebd3c3f40a7fa738325c3c798b2e8addde65fbefd9c4a7b7065)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/tor_p-z1-bz0-012_c_en.docx "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (35817 bytes, application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (35817 bytes, ab1e084a6f1ce690c5db2885e74693c8c01766a122ce9eed5d199ee23affd430)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1738 bytes, 66c84fb7a6aa3c4ead49f895e4a7044df1fb57de1ed76d09b2686e91f5bed5b4)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (734 bytes, a9ae57efe9186f07d48303bcac5d54c7e359bf3f503939c03ad2954e5c59a5c4)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (721 bytes, d14be8284e406d14dc2a576b19f15e7f637b955f9e27a3d9ed871ec99606f7ba)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1132 bytes, be664981c3141cddfc59362beb287ebf20d0773660e2dd6faac5968a5930a081)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (4044 bytes, 40f002745f4d797fe1adf604712bebaa4f51339c9976c260b48d4fdc9f58266a)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1227 bytes, 1e7f0eb144a98e199249314f61ff32a8de2a27e56d8e9ee6b524e1c6b235d377)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (349458 bytes, 02d71a68ddb92c055e84526d6a9e45700be3872781ababf759241694bc30e384)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (438131 bytes, 463ae0928cf0d84775dbf8cf18d6c3029f6707c81bf590f6d6dd8757a5e93f15)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (2535 bytes, 51a0d348fe85965c66e4748a03c3c0d055d78455514f03cb121c334af7d73689)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (438 bytes, 349d36de7434d09f86987ff671d8814964a0588c1e630c06e562cda7e75e9f95)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (2811 bytes, 79385fb7f60247507ecaffc292e9ebd52ea0657b8634f629ba6fccc54011d6bb)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (10939 bytes, e3a8ab7db9ca7afca56f5f2820a56e8b660016c647773555b060b0a02ac76941)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (262 bytes, a86086ffc5d8e83ebd6c71a55d1d2efaa31b137977f5f3a752366e1023612144)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (295 bytes, 1ca6c9a64edcebe24ee703a54403611b322d96da33371779e742d2d3f7ed7a6c)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (354 bytes, c542307b13ec29a8b546217bb37936ab4822e044b265d2952985ec3d6afed24e)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (5513 bytes, 70976f19cbcd896e51890859fe6ecb3467a5a7ad0c040160fedc5a1993cb09ce)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (8324 bytes, 96367138dc44ce09bf2c8f0f8e49348a1478d2c5c0af69bbc2bbc38b63cdcead)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/budget_template_en.xlsx "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1608 bytes, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1608 bytes, f3c789a4ea079fe3cca091e86e8574b50a3a1b2579f72a962d2f34bfc90ef7a9)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (564 bytes, f5ad3005c1965f229ffa7dcd237b06be3cad678499371287d54448ad6e4d6f19)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (299 bytes, c596984701ca0ac9d22e04ee194b91c9ba97b45876155652acddd85ff7d516c3)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (287 bytes, a3d163967993e843d374a16292b850087d36c13354836bf0c95b22bfbb2b5476)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (300 bytes, f06e8a4c0afb7225770f55b41ffb9e0d6dc071031bbe0118ad261ec5170e5003)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (257 bytes, 243a5acdb4da3d721fd0d1a1b956d164b304ae18b3eac8b287ae0a7643924669)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/annexes_p-z1-bz0-012_c_en.zip "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1304 bytes, application/zip)
+WARNING  tender_intelligence.acquisition.service:service.py:489 advertised size (3565158) and actual size (1304) differ beyond tolerance
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1304 bytes, 665e1972cb467485d7fef5531a52c89f04219d69ee86e8e9844cc9f50989502b)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1262 bytes, 1a52f0793ad4b27aff120670f9c540aceae5ea338963731fc629e63f1b6500cd)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (50 bytes, d35da8ad8ceb95776d3c30bfe81e5431a7883a29eb7a823e63bda6031ee2c30c)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/supporting_data.hwb "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (48 bytes, application/octet-stream)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (48 bytes, 869834d75406d34eb4d1935103eaa710e89e358866b36cffd78df9e41cdd267e)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/en/Annexe%201.pdf "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1244 bytes, application/pdf)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1244 bytes, ad6704421968d3c449940272f6298057d47200aea9fa9d081c6e78f33a96efc0)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/fr/Annexe%201.pdf "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (1244 bytes, application/pdf)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (1244 bytes, 4126ccaea6d3e1be5ac31c08ce6214090fcb991bd2d4c80974d5d6c62e68a524)
+INFO     httpx2:_client.py:1085 HTTP Request: GET https://data.wahooas.org/uploads/tenders/167/download?id=4128 "HTTP/1.1 200 OK"
+INFO     tender_intelligence.acquisition.fetcher:fetcher.py:251 document fetched (37 bytes, application/octet-stream)
+INFO     tender_intelligence.acquisition.service:service.py:577 document acquired (37 bytes, f183a0dc9c3e0d30f9e782d56829f3988d3842e8947b980f71ffec6b5991c9fc)
+INFO     tender_intelligence.acquisition.service:service.py:177 acquisition complete: 32 acquired, 0 failed
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 08-acquisition done: 96 document(s) acquired for 3 tender(s); 0 attachment failure(s), 3 acquisition attempt(s)
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 09-processing start: stage started
+INFO     tender_intelligence.processing.service:service.py:473 tender document bundle built
+INFO     tender_intelligence.processing.service:service.py:473 tender document bundle built
+INFO     tender_intelligence.processing.service:service.py:473 tender document bundle built
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 09-processing done: 96 document(s) across 3 tender(s); 3 complete bundle(s), 0 incomplete, 0 tender-level failure(s)
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 13-triage start: stage started
+INFO     tender_intelligence.orchestrator.stages:stages.py:157 13-triage done: 3 passed, 0 discarded, 0 failed across 3 tender(s)
+INFO     tender_intelligence.orchestrator.coordinator:coordinator.py:316 run finished: COMPLETED
+____________ TestFrenchDeadlinePatterns.test_date_limite_july_gmt _____________
+
+self = <test_deadline_waho_parser.TestFrenchDeadlinePatterns object at 0x00000148384A91D0>
+
+    def test_date_limite_july_gmt(self):
+        adapter = _adapter()
+        dl, tz, raw = adapter._parse_deadline(
+            "Date limite de d�p�t des candidatures : 31 juillet 2026 � 10 h 00 GMT."
+        )
+>       assert dl is not None
+E       assert None is not None
+
+tests\unit\test_deadline_waho_parser.py:80: AssertionError
+============================== warnings summary ===============================
+.venv\Lib\site-packages\starlette\testclient.py:53
+  C:\Users\ifeol\Desktop\Projects\tender-intelligence\.venv\Lib\site-packages\starlette\testclient.py:53: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/integration/test_orchestrator_pipeline.py::test_a_run_is_traceable_from_row_to_stage_to_tender_to_document
+FAILED tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt

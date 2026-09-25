@@ -1,0 +1,61 @@
+{
+  "prompt": "15",
+  "stage": "ADMIN_API",
+  "status": "NEEDS_FIXES",
+  "ready_for_prompt_16": false,
+  "implementation_present": true,
+  "independently_verified": false,
+  "api_contract_verified_except": [
+    "concurrent development-recipient mutation on PostgreSQL"
+  ],
+  "authorization_verified": true,
+  "secret_redaction_verified": true,
+  "source_dry_run_verified": true,
+  "source_dry_run_pipeline_writes": 0,
+  "timeline_persistence_verified": true,
+  "llm_test_mock_verified": true,
+  "llm_factory_missing_fails_safely": true,
+  "mail_test_mode_and_dev_recipient_verified_with_mocks": true,
+  "live_email_sent": false,
+  "live_llm_called": false,
+  "configuration_shared_with_worker": true,
+  "audit_persistence_verified": true,
+  "test_email_excluded_from_health_counters": true,
+  "test_mode_disabled_during_verification": false,
+  "postgres_recipient_concurrency_verified": false,
+  "regression_passed": false,
+  "tests": {
+    "full_suite_run": 620,
+    "full_suite_passed": 619,
+    "full_suite_failed": 1,
+    "focused_combined_run": 48,
+    "focused_combined_passed": 48,
+    "focused_combined_failed": 0,
+    "ruff_passed": true,
+    "upstream_failure": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt"
+  },
+  "defects_fixed": [
+    "Viewer access to KB version metadata and audit",
+    "invalid actor identity/role acceptance",
+    "missing recipient/provider email validation",
+    "unsafe generic settings mappings",
+    "plaintext custom LLM extra_headers acceptance",
+    "whitespace-only triage configuration values",
+    "source test bypassing RunCoordinator dry-run",
+    "test-mail rows polluting tender health counters",
+    "duplicate source/profile/provider/recipient conflict handling and credential audit metadata"
+  ],
+  "remaining_defects": [],
+  "remaining_verification_gaps": [
+    "PostgreSQL row-lock behavior for concurrent last-active development-recipient mutations was not behaviorally tested; local SQLite ignores FOR UPDATE.",
+    "Full suite retains one unrelated WAHO French deadline parsing failure caused by mojibake in the Windows test input.",
+    "Source dry-run reports candidate counts/planned actions, not individual candidate titles/URLs because RunReport exposes only summary metadata."
+  ],
+  "remaining_upstream_dependencies": [
+    "O11 production authentication provider/account provisioning remains open and default auth fails closed.",
+    "No concrete LLM provider factory is wired; connection-test endpoint safely reports unavailable without injection.",
+    "No live Sendlib connection was tested; mail tests use mocks and no email was sent.",
+    "Prompt 14 remains independently unverified."
+  ],
+  "final_gate": "PROMPT 15: NEEDS FIXES — DO NOT START PROMPT 16"
+}

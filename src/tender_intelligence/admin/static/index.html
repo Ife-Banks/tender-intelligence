@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#172554" />
+    <meta name="description" content="Tender Intelligence administration console." />
+    <title>Tender Intelligence · Operations Console</title>
+    <link rel="stylesheet" href="/admin/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Application navigation">
+        <a class="brand" href="#/health" aria-label="Tender Intelligence home">
+          <span class="brand-mark" aria-hidden="true">TI</span>
+          <span><strong>Tender Intelligence</strong><small>Operations console</small></span>
+        </a>
+        <div class="workspace-label">OPERATIONS</div>
+        <nav id="primary-nav" aria-label="Primary navigation"></nav>
+        <div class="sidebar-foot"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">Connecting to Admin API…</span></div>
+      </aside>
+
+      <div class="main-column">
+        <header class="topbar">
+          <div class="mobile-brand"><span class="brand-mark" aria-hidden="true">TI</span><strong>Tender Intelligence</strong></div>
+          <div class="topbar-spacer"></div>
+          <span id="demo-chip" class="demo-chip" hidden>DEMO DATA · OFFLINE</span>
+          <span id="test-mode-status" class="status-chip" aria-live="polite">TEST MODE · loading</span>
+          <span id="actor-role" class="status-chip">Role · loading</span>
+          <label id="demo-role-control" class="topbar-control" hidden><span>Preview role</span><select id="demo-role" aria-label="Preview role"><option value="admin">Admin</option><option value="viewer">Viewer</option></select></label>
+          <label id="scenario-control" class="topbar-control scenario-control" hidden><span>Scenario</span><select id="demo-scenario" aria-label="Preview scenario"></select></label>
+          <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh current screen" title="Refresh current fixture">↻</button>
+        </header>
+
+        <main id="main-content" tabindex="-1">
+          <div id="demo-banner" class="demo-banner" role="status" hidden><strong>OFFLINE PREVIEW</strong><span>All records and actions are synthetic. Nothing is sent to the Admin API, worker, source websites, AI providers, or mail providers.</span></div>
+          <div class="page-heading">
+            <div><p class="eyebrow">OPERATIONS</p><h1 id="page-title">Health dashboard</h1><p id="page-description" class="page-description"></p></div>
+            <div id="page-actions" class="page-actions"></div>
+          </div>
+          <div id="global-message" class="global-message" role="status" aria-live="polite" hidden></div>
+          <div id="screen-content" aria-live="polite" aria-busy="false"></div>
+        </main>
+        <footer class="app-footer"><span id="footer-state">Connecting to the Admin API…</span><span>Prompt 16B · Admin API client</span></footer>
+      </div>
+    </div>
+
+    <dialog id="confirm-dialog" class="dialog" aria-labelledby="confirm-title">
+      <form method="dialog" id="confirm-form" class="dialog-form">
+        <div class="dialog-heading"><div><p class="eyebrow">CONFIRM ACTION</p><h2 id="confirm-title">Please confirm</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+        <p id="confirm-message" class="muted"></p>
+        <div class="dialog-actions"><button class="button button-quiet" value="cancel">Cancel</button><button class="button button-danger" id="confirm-submit" value="confirm">Confirm</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="editor-dialog" class="dialog dialog-wide" aria-labelledby="editor-title">
+      <form method="dialog" id="editor-form" class="dialog-form"><div id="editor-form-content"></div></form>
+    </dialog>
+
+    <script type="module" src="/admin/app.mjs"></script>
+  </body>
+</html>

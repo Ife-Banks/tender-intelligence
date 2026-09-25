@@ -1,0 +1,287 @@
+EE                                                                       [100%]
+=================================== ERRORS ====================================
+_ ERROR at setup of test_stage_b_persists_verdict_provenance_and_formats_without_sending _
+
+path = '\\\\?\\C:\\Users\\ifeol\\Desktop\\Projects\\tender-intelligence\\.pytest-temp'
+dir_fd = None
+onexc = functools.partial(<function on_rm_rf_error at 0x0000024035CA9A60>, start_path=WindowsPath('//?/C:/Users/ifeol/Desktop/Projects/tender-intelligence/.pytest-temp'))
+
+    def _rmtree_unsafe(path, dir_fd, onexc):
+        if dir_fd is not None:
+            raise NotImplementedError("dir_fd unavailable on this platform")
+        try:
+            st = os.lstat(path)
+        except OSError as err:
+            onexc(os.lstat, path, err)
+            return
+        try:
+            if _rmtree_islink(st):
+                # symlinks to directories are forbidden, see bug #1669
+                raise OSError("Cannot call rmtree on a symbolic link")
+        except OSError as err:
+            onexc(os.path.islink, path, err)
+            # can't continue even if onexc hook returns
+            return
+        def onerror(err):
+            if not isinstance(err, FileNotFoundError):
+                onexc(os.scandir, err.filename, err)
+        results = os.walk(path, topdown=False, onerror=onerror, followlinks=os._walk_symlinks_as_files)
+        for dirpath, dirnames, filenames in results:
+            for name in dirnames:
+                fullname = os.path.join(dirpath, name)
+                try:
+                    os.rmdir(fullname)
+                except FileNotFoundError:
+                    continue
+                except OSError as err:
+                    onexc(os.rmdir, fullname, err)
+            for name in filenames:
+                fullname = os.path.join(dirpath, name)
+                try:
+>                   os.unlink(fullname)
+E                   PermissionError: [WinError 32] The process cannot access the file because it is being used by another process: '\\\\?\\C:\\Users\\ifeol\\Desktop\\Projects\\tender-intelligence\\.pytest-temp\\test_concurrent_claims_leave_s0\\claims.db'
+
+..\..\..\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\shutil.py:701: PermissionError
+
+During handling of the above exception, another exception occurred:
+
+path = '\\\\?\\C:\\Users\\ifeol\\Desktop\\Projects\\tender-intelligence\\.pytest-temp'
+ignore_errors = False, onerror = None
+onexc = functools.partial(<function on_rm_rf_error at 0x0000024035CA9A60>, start_path=WindowsPath('//?/C:/Users/ifeol/Desktop/Projects/tender-intelligence/.pytest-temp'))
+dir_fd = None
+
+    def rmtree(path, ignore_errors=False, onerror=None, *, onexc=None, dir_fd=None):
+        """Recursively delete a directory tree.
+    
+        If dir_fd is not None, it should be a file descriptor open to a directory;
+        path will then be relative to that directory.
+        dir_fd may not be implemented on your platform.
+        If it is unavailable, using it will raise a NotImplementedError.
+    
+        If ignore_errors is set, errors are ignored; otherwise, if onexc or
+        onerror is set, it is called to handle the error with arguments (func,
+        path, exc_info) where func is platform and implementation dependent;
+        path is the argument to that function that caused it to fail; and
+        the value of exc_info describes the exception. For onexc it is the
+        exception instance, and for onerror it is a tuple as returned by
+        sys.exc_info().  If ignore_errors is false and both onexc and
+        onerror are None, the exception is reraised.
+    
+        onerror is deprecated and only remains for backwards compatibility.
+        If both onerror and onexc are set, onerror is ignored and onexc is used.
+        """
+    
+        sys.audit("shutil.rmtree", path, dir_fd)
+        if ignore_errors:
+            def onexc(*args):
+                pass
+        elif onerror is None and onexc is None:
+            def onexc(*args):
+                raise
+        elif onexc is None:
+            if onerror is None:
+                def onexc(*args):
+                    raise
+            else:
+                # delegate to onerror
+                def onexc(*args):
+                    func, path, exc = args
+                    if exc is None:
+                        exc_info = None, None, None
+                    else:
+                        exc_info = type(exc), exc, exc.__traceback__
+                    return onerror(func, path, exc_info)
+    
+>       _rmtree_impl(path, dir_fd, onexc)
+
+..\..\..\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\shutil.py:852: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+path = '\\\\?\\C:\\Users\\ifeol\\Desktop\\Projects\\tender-intelligence\\.pytest-temp'
+dir_fd = None
+onexc = functools.partial(<function on_rm_rf_error at 0x0000024035CA9A60>, start_path=WindowsPath('//?/C:/Users/ifeol/Desktop/Projects/tender-intelligence/.pytest-temp'))
+
+    def _rmtree_unsafe(path, dir_fd, onexc):
+        if dir_fd is not None:
+            raise NotImplementedError("dir_fd unavailable on this platform")
+        try:
+            st = os.lstat(path)
+        except OSError as err:
+            onexc(os.lstat, path, err)
+            return
+        try:
+            if _rmtree_islink(st):
+                # symlinks to directories are forbidden, see bug #1669
+                raise OSError("Cannot call rmtree on a symbolic link")
+        except OSError as err:
+            onexc(os.path.islink, path, err)
+            # can't continue even if onexc hook returns
+            return
+        def onerror(err):
+            if not isinstance(err, FileNotFoundError):
+                onexc(os.scandir, err.filename, err)
+        results = os.walk(path, topdown=False, onerror=onerror, followlinks=os._walk_symlinks_as_files)
+        for dirpath, dirnames, filenames in results:
+            for name in dirnames:
+                fullname = os.path.join(dirpath, name)
+                try:
+                    os.rmdir(fullname)
+                except FileNotFoundError:
+                    continue
+                except OSError as err:
+                    onexc(os.rmdir, fullname, err)
+            for name in filenames:
+                fullname = os.path.join(dirpath, name)
+                try:
+                    os.unlink(fullname)
+                except FileNotFoundError:
+                    continue
+                except OSError as err:
+>                   onexc(os.unlink, fullname, err)
+E                   PermissionError: [WinError 32] The process cannot access the file because it is being used by another process: '\\\\?\\C:\\Users\\ifeol\\Desktop\\Projects\\tender-intelligence\\.pytest-temp\\test_concurrent_claims_leave_s0\\claims.db'
+
+..\..\..\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\shutil.py:705: PermissionError
+_______ ERROR at setup of test_unapproved_profile_never_invoked_with_kb _______
+
+path = '\\\\?\\C:\\Users\\ifeol\\Desktop\\Projects\\tender-intelligence\\.pytest-temp'
+dir_fd = None
+onexc = functools.partial(<function on_rm_rf_error at 0x0000024035CA9A60>, start_path=WindowsPath('//?/C:/Users/ifeol/Desktop/Projects/tender-intelligence/.pytest-temp'))
+
+    def _rmtree_unsafe(path, dir_fd, onexc):
+        if dir_fd is not None:
+            raise NotImplementedError("dir_fd unavailable on this platform")
+        try:
+            st = os.lstat(path)
+        except OSError as err:
+            onexc(os.lstat, path, err)
+            return
+        try:
+            if _rmtree_islink(st):
+                # symlinks to directories are forbidden, see bug #1669
+                raise OSError("Cannot call rmtree on a symbolic link")
+        except OSError as err:
+            onexc(os.path.islink, path, err)
+            # can't continue even if onexc hook returns
+            return
+        def onerror(err):
+            if not isinstance(err, FileNotFoundError):
+                onexc(os.scandir, err.filename, err)
+        results = os.walk(path, topdown=False, onerror=onerror, followlinks=os._walk_symlinks_as_files)
+        for dirpath, dirnames, filenames in results:
+            for name in dirnames:
+                fullname = os.path.join(dirpath, name)
+                try:
+                    os.rmdir(fullname)
+                except FileNotFoundError:
+                    continue
+                except OSError as err:
+                    onexc(os.rmdir, fullname, err)
+            for name in filenames:
+                fullname = os.path.join(dirpath, name)
+                try:
+>                   os.unlink(fullname)
+E                   PermissionError: [WinError 32] The process cannot access the file because it is being used by another process: '\\\\?\\C:\\Users\\ifeol\\Desktop\\Projects\\tender-intelligence\\.pytest-temp\\test_concurrent_claims_leave_s0\\claims.db'
+
+..\..\..\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\shutil.py:701: PermissionError
+
+During handling of the above exception, another exception occurred:
+
+path = '\\\\?\\C:\\Users\\ifeol\\Desktop\\Projects\\tender-intelligence\\.pytest-temp'
+ignore_errors = False, onerror = None
+onexc = functools.partial(<function on_rm_rf_error at 0x0000024035CA9A60>, start_path=WindowsPath('//?/C:/Users/ifeol/Desktop/Projects/tender-intelligence/.pytest-temp'))
+dir_fd = None
+
+    def rmtree(path, ignore_errors=False, onerror=None, *, onexc=None, dir_fd=None):
+        """Recursively delete a directory tree.
+    
+        If dir_fd is not None, it should be a file descriptor open to a directory;
+        path will then be relative to that directory.
+        dir_fd may not be implemented on your platform.
+        If it is unavailable, using it will raise a NotImplementedError.
+    
+        If ignore_errors is set, errors are ignored; otherwise, if onexc or
+        onerror is set, it is called to handle the error with arguments (func,
+        path, exc_info) where func is platform and implementation dependent;
+        path is the argument to that function that caused it to fail; and
+        the value of exc_info describes the exception. For onexc it is the
+        exception instance, and for onerror it is a tuple as returned by
+        sys.exc_info().  If ignore_errors is false and both onexc and
+        onerror are None, the exception is reraised.
+    
+        onerror is deprecated and only remains for backwards compatibility.
+        If both onerror and onexc are set, onerror is ignored and onexc is used.
+        """
+    
+        sys.audit("shutil.rmtree", path, dir_fd)
+        if ignore_errors:
+            def onexc(*args):
+                pass
+        elif onerror is None and onexc is None:
+            def onexc(*args):
+                raise
+        elif onexc is None:
+            if onerror is None:
+                def onexc(*args):
+                    raise
+            else:
+                # delegate to onerror
+                def onexc(*args):
+                    func, path, exc = args
+                    if exc is None:
+                        exc_info = None, None, None
+                    else:
+                        exc_info = type(exc), exc, exc.__traceback__
+                    return onerror(func, path, exc_info)
+    
+>       _rmtree_impl(path, dir_fd, onexc)
+
+..\..\..\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\shutil.py:852: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+path = '\\\\?\\C:\\Users\\ifeol\\Desktop\\Projects\\tender-intelligence\\.pytest-temp'
+dir_fd = None
+onexc = functools.partial(<function on_rm_rf_error at 0x0000024035CA9A60>, start_path=WindowsPath('//?/C:/Users/ifeol/Desktop/Projects/tender-intelligence/.pytest-temp'))
+
+    def _rmtree_unsafe(path, dir_fd, onexc):
+        if dir_fd is not None:
+            raise NotImplementedError("dir_fd unavailable on this platform")
+        try:
+            st = os.lstat(path)
+        except OSError as err:
+            onexc(os.lstat, path, err)
+            return
+        try:
+            if _rmtree_islink(st):
+                # symlinks to directories are forbidden, see bug #1669
+                raise OSError("Cannot call rmtree on a symbolic link")
+        except OSError as err:
+            onexc(os.path.islink, path, err)
+            # can't continue even if onexc hook returns
+            return
+        def onerror(err):
+            if not isinstance(err, FileNotFoundError):
+                onexc(os.scandir, err.filename, err)
+        results = os.walk(path, topdown=False, onerror=onerror, followlinks=os._walk_symlinks_as_files)
+        for dirpath, dirnames, filenames in results:
+            for name in dirnames:
+                fullname = os.path.join(dirpath, name)
+                try:
+                    os.rmdir(fullname)
+                except FileNotFoundError:
+                    continue
+                except OSError as err:
+                    onexc(os.rmdir, fullname, err)
+            for name in filenames:
+                fullname = os.path.join(dirpath, name)
+                try:
+                    os.unlink(fullname)
+                except FileNotFoundError:
+                    continue
+                except OSError as err:
+>                   onexc(os.unlink, fullname, err)
+E                   PermissionError: [WinError 32] The process cannot access the file because it is being used by another process: '\\\\?\\C:\\Users\\ifeol\\Desktop\\Projects\\tender-intelligence\\.pytest-temp\\test_concurrent_claims_leave_s0\\claims.db'
+
+..\..\..\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\shutil.py:705: PermissionError
+=========================== short test summary info ===========================
+ERROR tests/integration/test_verdict_engine.py::test_stage_b_persists_verdict_provenance_and_formats_without_sending
+ERROR tests/integration/test_verdict_engine.py::test_unapproved_profile_never_invoked_with_kb

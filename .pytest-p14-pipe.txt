@@ -1,0 +1,63 @@
+F
+================================== FAILURES ===================================
+____ test_full_offline_source_run_walks_04_to_09_and_persists_every_stage _____
+
+session_factory_gr = sessionmaker(class_='Session', bind=Engine(sqlite://), autoflush=False, expire_on_commit=False)
+tmp_path = WindowsPath('C:/Users/ifeol/Desktop/Projects/tender-intelligence/.pytest-p14-pipe/test_full_offline_source_run_w0')
+
+    def test_full_offline_source_run_walks_04_to_09_and_persists_every_stage(
+        session_factory_gr, tmp_path
+    ) -> None:
+        """\xa719 A \u2014 RunHistory START \u2192 04 \u2192 05 \u2192 06 \u2192 07 \u2192 08 \u2192 09 \u2192 COMPLETED.
+    
+        Every claim is checked against persisted state: the run row, the tender rows, the document
+        rows and the extraction artifacts on disk.
+        """
+        harness = build_harness(session_factory_gr, tmp_path, ocr=StubOcrEngine())
+        source_id = harness.seed_source()
+        config_version = harness.ensure_settings()
+    
+        report = harness.coordinator.run_source(source_id)
+    
+        assert report.status is RunStatus.COMPLETED, report.stage_map()
+        assert report.dry_run is False
+        assert report.run_history_id is not None
+    
+        # -- the run row, read back from the database --------------------------
+        rows = _run_rows(session_factory_gr, source_id)
+        assert len(rows) == 1
+        run = rows[0]
+        assert run.id == report.run_history_id
+        assert run.ended_at is not None, "a finished run must have an end timestamp"
+        assert run.error_count == 0
+        assert run.correlation_id == report.correlation_id
+        assert derive_run_status(run) == "COMPLETED"
+        assert run.config_version == config_version
+        assert run.failed_stage is None
+        assert run.error_code is None
+    
+        # The stage map is the reconstruction �8 requires: all six, in order, all COMPLETED.
+        assert run.stages is not None
+        assert list(run.stages) == [stage.value for stage in STAGE_ORDER]
+>       assert set(run.stages.values()) == {StageStatus.COMPLETED.value}
+E       AssertionError: assert {'COMPLETED', 'PENDING'} == {'COMPLETED'}
+E         
+E         Extra items in the left set:
+E         'PENDING'
+E         Use -v to get more diff
+
+tests\integration\test_orchestrator_pipeline.py:115: AssertionError
+---------------------------- Captured stdout call -----------------------------
+Consider using the pymupdf_layout package for a greatly improved page layout analysis.
+------------------------------ Captured log call ------------------------------
+WARNING  tender_intelligence.deadline.service:service.py:165 conflicting deadlines from listing (2026-10-15 16:00:00+00:00) and detail (2026-09-24 13:00:00+00:00)
+WARNING  tender_intelligence.deadline.service:service.py:165 conflicting deadlines from listing (2026-09-24 12:00:00+00:00) and detail (2026-09-24 13:00:00+00:00)
+WARNING  tender_intelligence.acquisition.service:service.py:489 advertised size (1258291) and actual size (1259) differ beyond tolerance
+WARNING  tender_intelligence.acquisition.service:service.py:489 advertised size (3565158) and actual size (1304) differ beyond tolerance
+WARNING  tender_intelligence.acquisition.service:service.py:489 advertised size (1258291) and actual size (1259) differ beyond tolerance
+WARNING  tender_intelligence.acquisition.service:service.py:489 advertised size (3565158) and actual size (1304) differ beyond tolerance
+WARNING  tender_intelligence.acquisition.service:service.py:489 advertised size (1258291) and actual size (1259) differ beyond tolerance
+WARNING  tender_intelligence.acquisition.service:service.py:489 advertised size (3565158) and actual size (1304) differ beyond tolerance
+=========================== short test summary info ===========================
+FAILED tests/integration/test_orchestrator_pipeline.py::test_full_offline_source_run_walks_04_to_09_and_persists_every_stage
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!

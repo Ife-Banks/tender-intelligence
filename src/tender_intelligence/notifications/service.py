@@ -42,6 +42,7 @@ from tender_intelligence.db.models.config import Setting
 from tender_intelligence.db.models.documents import Document
 from tender_intelligence.db.models.mail import MailProvider as MailProviderModel
 from tender_intelligence.db.models.mail import NotificationLog
+from tender_intelligence.db.models.recipients import Recipient
 from tender_intelligence.db.models.tenders import Tender
 from tender_intelligence.db.models.verdicts import Verdict
 from tender_intelligence.db.repositories.base import PersistenceError
@@ -296,6 +297,124 @@ class NotificationService:
                     dedupe_key=row.dedupe_key,
                 )
             return self._send_reserved(prepared, int(row.id))
+
+    def send_test_email(
+        self,
+        recipient_email: str,
+        subject: str,
+        text_body: str,
+        *,
+        correlation_id: str | None = None,
+        preferred_provider_id: int | None = None,
+    ) -> NotificationOutcome:
+        """Send an operator test through the configured chain to one active dev recipient.
+
+        This uses the existing chain, breaker, rate-limit and attempt repositories. It creates
+        a notification audit row with no tender/verdict association and never enters the
+        tender-notification reservation/retry path.
+        """
+        correlation_id = correlation_id or str(uuid.uuid4())
+        with self._delivery_lock:
+            with self._session() as session:
+                setting = session.get(Setting, 1)
+                recipient = session.scalar(
+                    select(Recipient).where(
+                        Recipient.email == recipient_email,
+                        Recipient.list_type == "dev_alert",
+                        Recipient.active.is_(True),
+                    )
+                )
+                if setting is None or not setting.test_mode:
+                    raise NotificationSafetyError(
+                        NOTIFICATION_ROUTING_FAILED, "Test Mode is required for test email"
+                    )
+                if recipient is None:
+                    raise NotificationSafetyError(
+                        NOTIFICATION_ROUTING_FAILED,
+                        "recipient is not an active dev-alert recipient",
+                    )
+                recipient_snapshot = [
+                    {"email": recipient.email, "delivery": "to", "list_type": "dev_alert"}
+                ]
+                dedupe_key = f"admin-test:{uuid.uuid4().hex}"
+                row = NotificationRepository(session).create_pending(
+                    dedupe_key=dedupe_key,
+                    tender_id=None,
+                    verdict_id=None,
+                    correlation_id=correlation_id,
+                    recipients_snapshot=recipient_snapshot,
+                    attachments=[],
+                    links=[],
+                    notification_kind="test",
+                    message_payload={"subject": subject, "text_body": text_body, "test_mode": True},
+                )
+                row.status = "sending"
+                log_id = int(row.id)
+                provider_rows = MailProviderRepository(session).list_active_ordered()
+
+            policy = TestModePolicy(True)
+            message = EmailMessage(
+                to=(recipient_email,),
+                subject=policy.apply_subject_prefix(subject),
+                text_body=text_body,
+                dedupe_key=dedupe_key,
+                correlation_id=correlation_id,
+            )
+            message.validate()
+            chain = self._build_chain(
+                provider_rows, preferred=preferred_provider_id, correlation_id=correlation_id
+            )
+
+            def recheck_test_route() -> None:
+                with self._session() as session:
+                    current_setting = session.get(Setting, 1)
+                    current_recipient = session.scalar(
+                        select(Recipient).where(
+                            Recipient.email == recipient_email,
+                            Recipient.list_type == "dev_alert",
+                            Recipient.active.is_(True),
+                        )
+                    )
+                    if (
+                        current_setting is None
+                        or not current_setting.test_mode
+                        or current_recipient is None
+                    ):
+                        raise NotificationSafetyError(
+                            NOTIFICATION_ROUTING_FAILED,
+                            "test recipient route changed before delivery",
+                        )
+
+            result = (
+                chain.deliver(message, before_attempt=recheck_test_route)
+                if chain.providers
+                else ChainResult(
+                    delivered=False,
+                    error_code=MAIL_CONFIGURATION_ERROR,
+                    notification_status="failed",
+                )
+            )
+            with self._session() as session:
+                self._persist_attempts(session, log_id, correlation_id, result)
+                self._persist_breakers(session, chain)
+                row = NotificationRepository(session).get_for_update(log_id)
+                if row is not None:
+                    row.status = "sent" if result.delivered else "failed"
+                    row.provider_used = result.provider_used
+                    row.sent_at = datetime.now(UTC) if result.delivered else None
+                    row.possible_duplicate = result.possible_duplicate
+                    row.last_error_code = result.error_code
+                    row.error = result.error_code if not result.delivered else None
+                    row.claim_token = None
+                    row.claim_until = None
+            return NotificationOutcome(
+                status="sent" if result.delivered else "failed",
+                notification_log_id=log_id,
+                provider_used=result.provider_used,
+                possible_duplicate=result.possible_duplicate,
+                error_code=result.error_code,
+                dedupe_key=dedupe_key,
+            )
 
     def flush_pending_retry(self, limit: int = 10) -> FlushSummary:
         """Claim and retry durable outbox entries after a worker/provider restart."""

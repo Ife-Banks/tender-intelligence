@@ -1,0 +1,43 @@
+........................................................................ [ 11%]
+........................................................................ [ 23%]
+........................................................................ [ 34%]
+........................................................................ [ 46%]
+........................................................................ [ 58%]
+..F..................................................................... [ 69%]
+........................................................................ [ 81%]
+........................................................................ [ 92%]
+............................................                             [100%]
+================================== FAILURES ===================================
+____________ TestFrenchDeadlinePatterns.test_date_limite_july_gmt _____________
+
+self = <test_deadline_waho_parser.TestFrenchDeadlinePatterns object at 0x000002105A4E6FD0>
+
+    def test_date_limite_july_gmt(self):
+        adapter = _adapter()
+        dl, tz, raw = adapter._parse_deadline(
+            "Date limite de d�p�t des candidatures : 31 juillet 2026 � 10 h 00 GMT."
+        )
+>       assert dl is not None
+E       assert None is not None
+
+tests\unit\test_deadline_waho_parser.py:80: AssertionError
+============================== warnings summary ===============================
+.venv\Lib\site-packages\starlette\testclient.py:53
+  C:\Users\ifeol\Desktop\Projects\tender-intelligence\.venv\Lib\site-packages\starlette\testclient.py:53: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt
+
+FOCUSED FINAL VERIFICATION
+Command: pytest -p no:cacheprovider --basetemp=.verification-tmp-final tests/integration/test_admin_api_prompt15.py tests/integration/test_admin_api.py tests/integration/test_notification_service.py -q
+Result: 48 passed, 0 failed.
+Ruff: All checks passed.
+
+FULL REGRESSION
+Command: pytest -p no:cacheprovider --basetemp=.verification-tmp tests -q
+Result: 619 passed, 1 failed, 620 total.
+Failure: tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt
+Observed fixture text contains mojibake in the Windows environment (`d�p�t`, `�`); parser returned no deadline. This is outside Prompt 15 ownership.
+No production email or LLM provider was contacted.
