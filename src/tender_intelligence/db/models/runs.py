@@ -49,3 +49,7 @@ class RunHistory(Base, TimestampMixin):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     stages: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     config_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    trigger: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tender_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tenders.id", ondelete="SET NULL"), nullable=True, index=True
+    )

@@ -1,5 +1,11 @@
 # Prompt 17 — Security Hardening
 
+> **Current scope amendment (Prompt 16C):** Application-level login/identity authentication
+> and Admin/Viewer identity roles are intentionally deferred for the current internal-tool
+> version (O11). Do not add an IdP/login or viewer-role enforcement as part of hardening unless
+> the owner changes scope. Preserve the internal/private deployment assumption and all
+> independent safeguards. Do not treat this as authorization for public exposure.
+
 > Paste `prompts/00-master-context.md` first.
 
 ## Read
@@ -17,7 +23,7 @@ Perform a **security review and hardening pass** across the whole repository. Wo
 1. **Secrets:** encrypted at rest (master key outside the DB); write-only in UI/API; never in logs; never in `ConfigChangeLog`; never in commit history or fixtures.
 2. **No secret leakage paths:** grep the codebase for key/signature/token/password patterns in logs, exceptions, responses, tests, and docs. Fix every finding.
 3. **Data policy enforcement:** `approved_for_company_docs=false` profiles must be refused KB content — including fallback paths, and regardless of Test Mode. Verify with tests that would fail without the gate.
-4. **KB access control:** Viewer role cannot reach KB or secrets via API or UI; verify both server and client enforcement.
+4. **Secret handling:** API responses/UI never return provider credentials or other secret values; verify server-side masking and write-only behavior. Do not introduce anonymous RBAC.
 5. **Admin actions:** mutating endpoints audit-log (actor, entity, fields) and never record secret values; Test-Mode-off is explicit + audit-logged.
 6. **Dependencies/vulnerabilities:** run dependency/security scan tooling available in the repo (e.g. `pip-audit`/`npm audit`, or CI-compatible equivalent) and remediate or document findings.
 7. **Secure links:** signed URLs expire (default 14 days `[PROPOSED]`), storage paths never exposed, direct-URL guesses fail.
@@ -28,11 +34,11 @@ Perform a **security review and hardening pass** across the whole repository. Wo
 ## Out of scope
 
 - New business features or refactors beyond the security fix surface.
-- Resolving open decisions (O11 login method etc.) — note needs, don't decide.
+- Resolving other open business decisions. O11 login is deferred and non-blocking per the current owner scope decision.
 
 ## Tests
 
-- For every invariant you verify, add or keep a test that fails if the invariant is broken (secret-leak grep test, data-policy-refusal tests incl. fallback, no-secret-in-audit test, signed-link expiry test, viewer-blocked tests).
+- For every invariant you verify, add or keep a test that fails if the invariant is broken (secret-leak grep test, data-policy-refusal tests incl. fallback, no-secret-in-audit test, signed-link expiry test).
 - Negative tests: attempt each bypass and assert it fails.
 
 ## Rules

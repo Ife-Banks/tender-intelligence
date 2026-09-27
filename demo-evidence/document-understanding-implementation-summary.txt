@@ -1,0 +1,78 @@
+DOCUMENT UNDERSTANDING IMPLEMENTATION SUMMARY
+=============================================
+Date: 2026-09-24
+
+SCOPE
+-----
+Multilingual document understanding for tender documents.
+Formats: native PDF, scanned/image PDF, DOCX, ZIP archives, tables.
+Languages: English, French, Portuguese.
+
+RESULT: ALL REQUIREMENTS MET
+------------------------------
+The pipeline was already largely implemented. Three targeted gaps were closed
+and one syntax error introduced during editing was immediately fixed.
+
+CHANGES MADE THIS SESSION (4 edits across 2 files)
+----------------------------------------------------
+
+1. OCR MULTILINGUAL SUPPORT  [service.py]
+   DocumentProcessingConfig.ocr_lang changed from "eng" to "eng+fra+por".
+   Effect: Tesseract now covers all three portal languages in a single OCR
+   pass. Scanned French and Portuguese annexes no longer produce garbled
+   output.
+
+2. PER-SEGMENT LANGUAGE FIELD  [representation.py]
+   Added  language: str | None = None  to ExtractedPage and ExtractedSection.
+   Updated to_dict/from_dict for both. Updated content_fingerprint.
+   Effect: Each PDF page and each DOCX section carries its own language tag.
+   Mixed-language documents expose their language distribution at segment
+   granularity, not just document level.
+
+3. PER-SEGMENT LANGUAGE DETECTION  [service.py]
+   Added _tag_page_languages() and _tag_section_languages() helpers.
+   Called in _finalize() for all extracted documents.
+   Effect: Language detection runs once per page/section using the existing
+   stopword scorer. Segments below the 20-token minimum keep language=None
+   (correct metadata, not a gap).
+
+4. CHECKSUM-BASED DEDUPLICATION  [service.py]
+   Added hashlib. Two dedup paths:
+   - TenderDocumentProcessor.process(): sha256(bytes) keyed _seen dict;
+     duplicate paths skip re-extraction and return a filename-stamped copy.
+   - DocumentProcessingService.process_tender(): snapshot.checksum keyed
+     _seen_checksums; duplicate DB rows get re-stamped DocumentExtraction
+     from the prior result and are persisted + included in bundle.
+   Effect: ZIP members with identical bytes are extracted once. Duplicates
+   still appear in the bundle with their original identity — never silently
+   dropped.
+
+COMPONENTS ALREADY IMPLEMENTED AND VALIDATED
+---------------------------------------------
+- Native PDF extraction:    pymupdf per-page text, /Info metadata, page BBox
+- Scanned PDF OCR:          TesseractOcrEngine, probe-at-init, per-page
+- PDF table extraction:     find_tables() ruled-line strategy, role classified
+- DOCX extraction:          iter_inner_content order, headings, tables, props
+- ZIP archive processing:   depth-2 recursion, bomb protection, per-member limits
+- Language detection:       EN/FR/PT stopword scoring, 20-token floor, confidence
+- Table role classification: 5 roles, trilingual vocab, 2-hit minimum
+- Translation boundary:     explicit TranslationRecord — no auto-translation
+- Bundle assembly:          TenderDocumentBundle, languages list, failure isolation
+
+TEST RESULTS
+------------
+tests/unit/test_processing_docx.py          PASS
+tests/unit/test_processing_tables.py        PASS
+tests/unit/test_processing_pdf.py           PASS
+tests/integration/test_processing_service.py PASS
+All other unit tests                         PASS
+
+Pre-existing unrelated failure (not caused by this work):
+  test_deadline_waho_parser.py::test_date_limite_july_gmt
+  Cause: garbled Unicode box characters □ in a French date string fixture.
+  Confirmed: fails identically on baseline before any changes.
+
+FILES MODIFIED
+--------------
+src/tender_intelligence/processing/service.py
+src/tender_intelligence/processing/representation.py

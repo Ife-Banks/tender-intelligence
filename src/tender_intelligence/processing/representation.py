@@ -26,7 +26,18 @@ Tables (§9)
 ``ExtractedTable.rows`` always holds the **complete** matrix as extracted, so no cell is ever
 discarded. ``headers`` is a convenience view of the first row and ``header_convention`` records
 whether that reading was assumed rather than detected — PDF and DOCX carry no machine-readable
-header semantics, so claiming detection would be a fabrication.
+header semantics, so claiming detection would be a fabrication. ``role`` adds what the matrix
+*means* — a weighting scheme, a milestone schedule, a set of eligibility conditions — derived
+from the table's own vocabulary in the required languages (prompt 12 §7), because an intact matrix
+of weights and percentages is still unreadable if a consumer cannot tell it from a contact list.
+
+Document and structure metadata (prompt 12 §2, §4)
+--------------------------------------------------
+``DocumentExtraction.document_metadata`` preserves the container's own declared properties (PDF
+``/Info`` entries, DOCX core properties): title, author, subject, producer, dates. These are
+metadata, not content, so they are never substituted for text. DOCX paragraphs additionally carry
+``style`` and ``heading_level`` so a consumer can tell a heading from body text, which python-docx
+reports faithfully even though neither format marks it semantically for extraction.
 
 Status vocabulary (§11, §16)
 ----------------------------
@@ -42,6 +53,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from tender_intelligence.processing.tables import TABLE_ROLES
+from tender_intelligence.processing.translation import TranslationRecord
 from tender_intelligence.processing.versions import (
     BUNDLE_SCHEMA_VERSION,
     PROCESSOR_NAME,
@@ -59,11 +72,16 @@ PAGE_METHODS: tuple[str, ...] = ("native_pdf", "ocr")
 
 @dataclass(frozen=True)
 class ExtractedTable:
-    """One structured table (prompt 09 §9).
+    """One structured table (prompt 09 §9, prompt 12 §7).
 
     ``rows`` is the complete rectangular matrix as extracted; ``headers`` mirrors the first row
     when the table has more than one row and ``header_convention`` states that this is an assumed
     reading (``"first_row"``) rather than a detected header (``"none"`` when there is no such row).
+
+    ``role`` says which kind of table this is — one of :data:`~tender_intelligence.processing.
+    tables.TABLE_ROLES` — and ``role_source`` records that it came from the table's vocabulary
+    rather than from anything the format stated. It is a hint for prioritisation, never a
+    substitute for ``rows``.
     """
 
     location: str
@@ -73,6 +91,12 @@ class ExtractedTable:
     header_convention: str = "none"
     page: int | None = None
     bbox: list[float] | None = None
+    role: str = "other"
+    role_source: str = "none"
+
+    def __post_init__(self) -> None:
+        if self.role not in TABLE_ROLES:
+            raise ValueError(f"unknown table role {self.role!r}; expected one of {TABLE_ROLES}")
 
     @property
     def row_count(self) -> int:
@@ -103,6 +127,8 @@ class ExtractedTable:
             "header_convention": self.header_convention,
             "page": self.page,
             "bbox": list(self.bbox) if self.bbox is not None else None,
+            "role": self.role,
+            "role_source": self.role_source,
             "row_count": self.row_count,
             "column_count": self.column_count,
         }
@@ -118,12 +144,19 @@ class ExtractedTable:
             header_convention=str(data.get("header_convention", "none")),
             page=data.get("page"),
             bbox=[float(value) for value in bbox] if bbox is not None else None,
+            role=str(data.get("role", "other")),
+            role_source=str(data.get("role_source", "none")),
         )
 
 
 @dataclass(frozen=True)
 class ExtractedPage:
-    """One PDF page and its content (prompt 09 §4, §8). Numbers are 1-based."""
+    """One PDF page and its content (prompt 09 §4, §8). Numbers are 1-based.
+
+    ``language`` is the per-page language tag (BCP 47 primary subtag) detected from this page's
+    text after extraction (prompt 09 §10).  ``None`` when the page has too little text for a
+    reliable detection.  This is metadata only — it never alters the extracted text.
+    """
 
     number: int
     text: str
@@ -132,6 +165,7 @@ class ExtractedPage:
     native_text_chars: int = 0
     ocr_engine: str | None = None
     ocr_engine_version: str | None = None
+    language: str | None = None
 
     @property
     def location(self) -> str:
@@ -150,6 +184,7 @@ class ExtractedPage:
             "native_text_chars": self.native_text_chars,
             "ocr_engine": self.ocr_engine,
             "ocr_engine_version": self.ocr_engine_version,
+            "language": self.language,
             "tables": [table.to_dict() for table in self.tables],
         }
 
@@ -163,6 +198,7 @@ class ExtractedPage:
             native_text_chars=int(data.get("native_text_chars", 0)),
             ocr_engine=data.get("ocr_engine"),
             ocr_engine_version=data.get("ocr_engine_version"),
+            language=data.get("language"),
         )
 
 
@@ -173,16 +209,33 @@ class ExtractedSection:
     ``kind`` is ``"paragraph"`` or ``"table"``. DOCX blocks come from python-docx's
     ``iter_inner_content()``, which preserves the true interleaving of paragraphs and tables that
     the separate ``.paragraphs`` / ``.tables`` collections lose.
+
+    ``style`` and ``heading_level`` are the paragraph's own Word style where the format reports
+    one (prompt 12 §4: "headings where available"). A heading is not a separate ``kind`` — the
+    block is still a paragraph that happens to be styled as a heading, and saying otherwise would
+    misrepresent the document. Consumers ask :attr:`is_heading`.
+
+    ``language`` is the per-section language tag detected from this section's text (prompt 09 §10).
+    ``None`` when the section text is below the detection threshold.  This is metadata only — the
+    source text is never altered.
     """
 
     index: int
     kind: str
     text: str
     tables: list[ExtractedTable] = field(default_factory=list)
+    style: str | None = None
+    heading_level: int | None = None
+    language: str | None = None
 
     @property
     def location(self) -> str:
         return f"section:{self.index}"
+
+    @property
+    def is_heading(self) -> bool:
+        """Whether this block is styled as a heading in the source document."""
+        return self.heading_level is not None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -190,16 +243,24 @@ class ExtractedSection:
             "kind": self.kind,
             "text": self.text,
             "location": self.location,
+            "style": self.style,
+            "heading_level": self.heading_level,
+            "is_heading": self.is_heading,
+            "language": self.language,
             "tables": [table.to_dict() for table in self.tables],
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ExtractedSection:
+        heading_level = data.get("heading_level")
         return cls(
             index=int(data["index"]),
             kind=str(data.get("kind", "paragraph")),
             text=str(data.get("text", "")),
             tables=[ExtractedTable.from_dict(item) for item in data.get("tables", [])],
+            style=data.get("style"),
+            heading_level=int(heading_level) if heading_level is not None else None,
+            language=data.get("language"),
         )
 
 
@@ -275,6 +336,7 @@ class DocumentExtraction:
     pages: list[ExtractedPage] = field(default_factory=list)
     sections: list[ExtractedSection] = field(default_factory=list)
     archive_parent_url: str | None = None
+    document_metadata: dict[str, str] = field(default_factory=dict)
     metadata: ProcessingMetadata = field(default_factory=ProcessingMetadata)
 
     @property
@@ -325,11 +387,13 @@ class DocumentExtraction:
                 "extraction_method": self.extraction_method,
                 "language": self.language,
                 "text": self.text,
+                "document_metadata": dict(self.document_metadata),
                 "pages": [
                     {
                         "number": page.number,
                         "text": page.text,
                         "method": page.method,
+                        "language": page.language,
                         "tables": [table.to_dict() for table in page.tables],
                     }
                     for page in self.pages
@@ -339,6 +403,9 @@ class DocumentExtraction:
                         "index": section.index,
                         "kind": section.kind,
                         "text": section.text,
+                        "style": section.style,
+                        "heading_level": section.heading_level,
+                        "language": section.language,
                         "tables": [table.to_dict() for table in section.tables],
                     }
                     for section in self.sections
@@ -369,6 +436,7 @@ class DocumentExtraction:
             "page_count": self.page_count,
             "ocr_page_count": self.ocr_page_count,
             "archive_parent_url": self.archive_parent_url,
+            "document_metadata": dict(self.document_metadata),
             "content_fingerprint": self.content_fingerprint,
             "text": self.text,
             "pages": [page.to_dict() for page in self.pages],
@@ -396,19 +464,29 @@ class DocumentExtraction:
             pages=[ExtractedPage.from_dict(item) for item in data.get("pages", [])],
             sections=[ExtractedSection.from_dict(item) for item in data.get("sections", [])],
             archive_parent_url=data.get("archive_parent_url"),
+            document_metadata={
+                str(key): str(value) for key, value in (data.get("document_metadata") or {}).items()
+            },
             metadata=ProcessingMetadata.from_dict(data.get("metadata", {})),
         )
 
 
 @dataclass(frozen=True)
 class TenderDocumentBundle:
-    """One reusable bundle per tender (prompt 09 §12; docs/06 §6.3)."""
+    """One reusable bundle per tender (prompt 09 §12; docs/06 §6.3).
+
+    ``translation`` is the explicit boundary of prompt 12 §6: it states the languages actually
+    found, whether original text is preserved verbatim, and — when no provider is configured — the
+    limitation the AI stage is operating under. It is a required field with a conservative default
+    rather than an optional one, so a bundle cannot be produced that is silent about language.
+    """
 
     tender_id: int
     documents: list[DocumentExtraction] = field(default_factory=list)
     incomplete_inputs: bool = False
     languages: list[str] = field(default_factory=list)
     metadata: ProcessingMetadata = field(default_factory=ProcessingMetadata)
+    translation: TranslationRecord = field(default_factory=TranslationRecord)
     schema_version: int = BUNDLE_SCHEMA_VERSION
     created_at: str = ""
 
@@ -442,6 +520,7 @@ class TenderDocumentBundle:
             "created_at": self.created_at,
             "incomplete_inputs": self.incomplete_inputs,
             "languages": list(self.languages),
+            "translation": self.translation.to_dict(),
             "document_count": self.document_count,
             "extracted_count": len(self.extracted_documents),
             "failed_count": len(self.failed_documents),
@@ -458,6 +537,7 @@ class TenderDocumentBundle:
             incomplete_inputs=bool(data.get("incomplete_inputs", False)),
             languages=[str(item) for item in data.get("languages", [])],
             metadata=ProcessingMetadata.from_dict(data.get("metadata", {})),
+            translation=TranslationRecord.from_dict(data.get("translation", {})),
             schema_version=int(data.get("schema_version", BUNDLE_SCHEMA_VERSION)),
             created_at=str(data.get("created_at", "")),
         )

@@ -145,18 +145,21 @@ Impact if unresolved: Document archive + KB storage implementation cannot be fin
 link serving depends on it.
 ```
 
-## O11. Admin users
+## O11. Production application authentication (deferred)
 
 ```
-Decision: Who gets admin-app access, and with which role (Admin/Viewer)?
-Why it matters: §5.11 auth is confirmed; the exact login method and user list are open
-(v1.1 §12.3 #9).
-Current status: OPEN.
-Known options: Admin/Viewer roles [PROPOSED]; identity via internal accounts or company SSO.
-Information required: Named users + roles; preferred login method.
-Who should decide: OPEX.
-Impact if unresolved: Admin app cannot be secured/deployed to named users; viewer access to
-KB/secrets must remain blocked regardless.
+Decision: Application-level authentication/login is intentionally deferred for the current
+internal-tool version and is not required for Admin functionality.
+Why it matters: The original v1.1 proposal described Admin/Viewer roles and left identity
+provider selection open. The project owner has superseded that proposal for current scope.
+Current status: DEFERRED / OUT OF CURRENT SCOPE.
+Blocking: NO.
+Known options: Revisit login/identity requirements later if deployment assumptions change. No
+production identity provider is currently configured.
+Information required: None for current functionality.
+Who should decide: OPEX if the scope is reconsidered.
+Impact if unresolved: No current feature is blocked; deployment must remain within the
+internal/private operating assumption. This does not authorize public exposure.
 ```
 
 ## O12. Production LLM provider & data-handling approval
@@ -378,7 +381,7 @@ request boundary, but end-to-end delivery-side header visibility is not independ
 | Who | Decisions |
 |---|---|
 | OPEX (business) | O1, O5, O6, O7, O8, O9, O12, O16, O20, O21, O22, O23 |
-| OPEX (business + IT) | O3, O10, O11 |
+| OPEX (business + IT) | O3, O10 |
 | Build/maintain team (+ OPEX where relevant) | O2, O4, O13, O14, O18, O24 |
 | OPEX (IT) + build team | O17 |
 | Build team (evidenced by tests) | O18 |
@@ -391,7 +394,7 @@ request boundary, but end-to-end delivery-side header visibility is not independ
 | Phase 1 (Test Mode) | O3 (authorised sender mailbox) |
 | Phase 2 | O18 (vision/OCR default), O9 (budget value) perhaps O4 (2nd mail provider, Test Mode) |
 | Phase 3 | O8 (TenderDetail), O14 (ToS per source), O13 (providers 2/3 if chain required) |
-| Phase 4 (go-live) | O1, O3, O4, O9, O12, O11, O16, O20, O22 (partial-input wording), O5/O6/O7 (triage profile) |
+| Phase 4 (go-live) | O1, O3, O4, O9, O12, O16, O20, O22 (partial-input wording), O5/O6/O7 (triage profile) |
 
 ## Open-decision discipline
 

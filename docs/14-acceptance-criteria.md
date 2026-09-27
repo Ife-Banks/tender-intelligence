@@ -94,7 +94,7 @@
 - **SE1** Given any secret (source auth, LLM key, mail credential, OAuth token), When stored/used, Then it is encrypted at rest, write-only, never returned by APIs, and never present in logs or ConfigChangeLog.
 - **SE2** Given the encryption master key, When referenced, Then it exists outside the database (env var or secrets manager).
 - **SE3** Given a profile with `approved_for_company_docs = false`, When a call would include KB content, Then the content is refused, including when the profile is a fallback.
-- **SE4** Given a Viewer role, When the admin app is used, Then knowledge base and secrets are never exposed.
+- **SE4** Given the current internal Admin app, When credentials are configured or read, Then secret values remain write-only and are never returned to the browser, logs, or audit values. (Application login and Admin/Viewer identity roles are deferred by O11.)
 - **SE5** Given an unsigned or expired link, When accessed, Then access is denied (links are signed and expiring).
 - **SE6** Given production deployment, When go-live is reviewed, Then a security note lists every third party that sees data, with an owner.
 

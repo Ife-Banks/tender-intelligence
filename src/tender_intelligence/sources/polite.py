@@ -7,7 +7,9 @@ Responsibilities (docs/05 §5.2, prompt 04 §6):
 - retry policy with exponential backoff and ``Retry-After`` support.
 
 Everything is injectable so tests run against mocked transports / off-line fixtures and never
-hit the live source.
+hit the live source. The same policy covers every HTTP method: :class:`PoliteHttpClient` is
+both a :class:`Requester` and — through :func:`requester_get` — a :class:`Fetcher`, so a
+strategy that submits a form or reads a JSON POST cannot become a second, laxer transport.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import urllib.robotparser
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from threading import Lock
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx2
 
@@ -59,6 +61,37 @@ class Fetcher(Protocol):
         ...
 
 
+class Requester(Protocol):
+    """Callable performing one HTTP request of any method, returning :class:`HttpResponse`.
+
+    The strategies that cannot be expressed as a bare GET — a search-form submit, a JSON API
+    read with a POST body — take one of these instead of a :class:`Fetcher`. Every politeness
+    rule stays in one place because the only production implementation is
+    :class:`PoliteHttpClient`.
+    """
+
+    def __call__(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        json: Any | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> HttpResponse:
+        ...
+
+
+def requester_get(requester: Requester) -> Fetcher:
+    """Adapt a :class:`Requester` to the :class:`Fetcher` a listing crawl expects."""
+
+    def fetch(url: str) -> HttpResponse:
+        return requester("GET", url)
+
+    return fetch
+
+
 class PoliteHttpClient:
     """HTTP client enforcing the crawl policy: robots, pacing, timeout, retries."""
 
@@ -96,6 +129,25 @@ class PoliteHttpClient:
         self.close()
 
     def get(self, url: str) -> HttpResponse:
+        return self("GET", url)
+
+    def __call__(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        json: Any | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> HttpResponse:
+        """Issue one request under the full crawl policy.
+
+        robots.txt, pacing, timeout, retry and backoff are applied identically to every
+        method, so widening the transport to POST/JSON cannot quietly buy a strategy a
+        less-polite path (docs/05 §5.2). A non-retryable HTTP status is *returned*, not
+        raised: the calling adapter decides what a 403 or a 404 means for its own parsing.
+        """
         if self._policy.respect_robots and not self._robots_allows(url):
             raise SourceError(
                 "request disallowed by robots.txt",
@@ -107,7 +159,14 @@ class PoliteHttpClient:
         while True:
             self._pace()
             try:
-                response = self._client.get(url)
+                response = self._client.request(
+                    method.upper(),
+                    url,
+                    params=params,
+                    data=data,
+                    json=json,
+                    headers=headers,
+                )
             except TRANSIENT_TRANSPORT_ERRORS as exc:
                 log.info(
                     "transport error fetching %s (attempt %d)",

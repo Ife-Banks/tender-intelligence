@@ -1,0 +1,12 @@
+NOTIFICATION ARCHITECTURE: IMPLEMENTED — READY FOR INDEPENDENT VERIFICATION
+
+Added a channel-neutral NotificationChannel.send(notification) protocol and NotificationDispatcher. EmailNotificationChannel delegates to the existing NotificationService, preserving its mail provider chain, sender/recipient handling, attachment planner, secure links, text/HTML rendering, retries, circuit breaker, Test Mode, and audit persistence. Shared NotificationEvent/NotificationOutcome contracts no longer depend on the mail template module.
+
+Email is the only usable channel. No Slack, Teams, SMS, webhook, third-party provider, channel credentials, or operational channel settings were added. The existing worker coordinator has no notification-send stage; this change establishes the delivery boundary without adding automatic worker email delivery.
+
+Focused notification/mail/alert suite: 121 passed.
+Admin API, Sendlib adapter, and security suite: 41 passed, 1 deprecation warning.
+Ruff: passed.
+Full suite: 706 passed, 1 failed, 1 warning. The sole failure is the unrelated pre-existing tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt.
+
+This implementation is ready for independent verification; it is not an independent verification claim.

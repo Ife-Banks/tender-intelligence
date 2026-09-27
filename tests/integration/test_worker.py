@@ -49,11 +49,7 @@ def test_worker_bootstraps_empty_db(migrated_db, tmp_path, monkeypatch):
 
     yaml_file = tmp_path / "seed.yml"
     yaml_file.write_text(
-        "dev_alert_email: dev@opex.example\n"
-        "sources:\n"
-        "  - name: WAHO\n"
-        "    type: html\n"
-        "    base_url: https://afro.who.int/programmes\n",
+        "dev_alert_email: dev@opex.example\n",
         encoding="utf-8",
     )
 

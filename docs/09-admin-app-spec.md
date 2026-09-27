@@ -17,18 +17,19 @@
 | 2 | **Sources** | List, add, edit, enable/disable; "Test this source" dry run (shows what it would find). |
 | 3 | **Tenders** | Browse; open one to see its **timeline by correlation ID** (seen → documents → extraction → triage → verdict → email). |
 | 4 | **Knowledge base** | Edit/upload (`.docx`, `.pdf`, `.md`, `.txt` or pasted text), version history, diff between versions, **token-budget indicator**. |
-| 5 | **LLM providers** | Profiles; role assignment; "Test connection"; `approved_for_company_docs` toggle; usage and budget. |
+| 5 | **LLM providers** | Profiles; pipeline LLM role assignment; "Test connection"; `approved_for_company_docs` toggle; usage and budget. |
 | 6 | **Recipients** | The two lists (tender recipients; dev alert recipients) as per §5.10.1. |
 | 7 | **Mail providers** | Chain order, capabilities, "Send test email", breaker status. |
 | 8 | **Triage & urgency** | Include/exclude keywords, target sectors/regions, optional minimum contract value, relevance threshold, urgency window. |
 | 9 | **Settings** | Test Mode switch (§5.12), alert thresholds, retention. |
 | 10 | **Audit log** | Every configuration change (who, when, which fields — never secret values). |
 
-## 9.3 Authentication
+## 9.3 Application access
 
-- **Confirmed:** authenticated users only (v1.1 §5.11). The knowledge base and secrets are **never exposed to Viewers**.
-- **Roles [PROPOSED]:** at least Admin (can change configuration and secrets) and Viewer (read-only dashboards and timelines).
-- **Open decision:** the exact login method and who gets access — `docs/13-open-decisions.md` (#9). Do not invent an SSO/identity provider or user provisioning process.
+- **Current decision:** application-level authentication/login is intentionally deferred for the current internal-tool version and is not a prerequisite for Admin functionality (`docs/13-open-decisions.md`, O11).
+- No Admin/Viewer identity model or fake identity is implemented. Admin UI/API routes operate without an application login.
+- Keep deployment within the intended internal/private environment. This does not authorize public exposure; network-level access restrictions remain a separate deployment concern.
+- Revisit this decision only if product scope or deployment assumptions change. No production identity provider is configured.
 
 ## 9.4 Configuration management
 
@@ -70,7 +71,7 @@
 
 ## 9.10 Read/write responsibilities
 
-| Data | Admin write? | Worker write? |
+| Data | Internal Admin UI write? | Worker write? |
 |---|---|---|
 | Sources, recipients, LLM profiles/roles, mail providers, settings, triage rules, KB | Yes (audit-logged) | No (reads only) |
 | Tenders, documents, run history, verdicts, notifications, alerts, usage, breaker state | No (read-only via timelines/health) | Yes |
@@ -80,6 +81,7 @@
 
 ## 9.11 Confirmed vs proposed
 
-- **Confirmed:** the ten screens; dry-run admin; authenticated users; viewers cannot see KB/secrets; admin-on-down resilience; audit of config; write-only secrets; Test Mode switch; health dashboard per-source metrics & red banner.
-- **Proposed:** Admin/Viewer role model; login method; specific UI framework; breaker observability details.
-- **Open decisions:** admin user accounts and access — `docs/13-open-decisions.md`.
+- **Confirmed:** the ten screens; dry-run operations; no current application login; admin-on-down resilience; audit of config; write-only secrets; Test Mode switch; health dashboard per-source metrics & red banner.
+- **Deferred:** application identity/login and Admin/Viewer identity roles.
+- **Proposed:** specific UI framework; breaker observability details.
+- **Deferred:** application identity/user accounts are not required for current functionality (O11). Deployment access restrictions remain an operational concern.

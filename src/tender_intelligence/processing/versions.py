@@ -20,7 +20,11 @@ from typing import Any
 
 #: Declared implementation version of the extraction pipeline. Bump on any change to extraction
 #: behaviour that should invalidate previously persisted extractions.
-PROCESSOR_VERSION = "1.0.0"
+#: 1.1.0 — document metadata (PDF ``/Info``, DOCX core properties), DOCX heading styles, table
+#: role classification, and the explicit translation record (prompt 12). Persisted 1.0.0 artifacts
+#: lack those fields, and reusing them would present an old extraction as if it carried metadata
+#: it never contained, so reuse is deliberately invalidated here rather than silently degraded.
+PROCESSOR_VERSION = "1.1.0"
 
 #: Version of the extraction *configuration* (render DPI, sufficiency threshold, OCR language).
 #: Bump when a default changes in a way that alters output.

@@ -1,0 +1,3 @@
+KNOWLEDGE BASE & RETRIEVAL: IMPLEMENTED — READY FOR INDEPENDENT VERIFICATION
+
+Bounded deterministic retrieval now feeds Stage B from existing immutable KB versions. Version and selected evidence provenance are persisted. 33 focused tests passed; Ruff passed. OPEX authoritative content remains to be supplied.

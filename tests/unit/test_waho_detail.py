@@ -372,3 +372,94 @@ def test_grouped_size_never_mis_attributed_and_multiple_blocks_enumerated() -> N
 
 
 DETAIL_EN_DIR = "https://data.wahooas.org/uploads/tenders/167/"
+
+
+# ── URL template regression tests (Prompt 16C FIX #2) ─────────────────────
+
+
+class TestDetailUrlTemplate:
+    """Generated detail URLs must be clean — no ° or %C2%B0 corruption."""
+
+    def test_normal_tender_id_produces_clean_url(self):
+        adapter = WahoPaginatedAdapter("https://data.wahooas.org/tenders/tenders/list")
+        url = adapter._detail_url("162")
+        assert "\u00b0" not in url
+        assert "%C2%B0" not in url
+        assert url == "https://data.wahooas.org/tenders/tenders/162/list"
+
+    def test_url_does_not_contain_degree_characters(self):
+        adapter = WahoPaginatedAdapter("https://data.wahooas.org/tenders/tenders/list")
+        for tender_id in ["1", "42", "999", "12345"]:
+            url = adapter._detail_url(tender_id)
+            assert "\u00b0" not in url, f"° found in URL for tender {tender_id}: {url}"
+            assert "%C2%B0" not in url, f"%C2%B0 found in URL for tender {tender_id}: {url}"
+
+
+# ---------------------------------------------------------------------------
+# Fix verification — degree-symbol href rejection (Prompt 16C FIX #2)
+# ---------------------------------------------------------------------------
+
+DETAIL_DEGREE = _detail_url("162")
+_DEGREE_FIXTURE = "detail_degree_href.html"
+
+
+def _adapter_for_degree() -> WahoPaginatedAdapter:
+    """Adapter backed by the degree-href fixture, with default (clean) parser config."""
+    return _adapter({DETAIL_DEGREE: _DEGREE_FIXTURE})
+
+
+# Test G — Clean WAHO attachment href produces the correct absolute URL
+def test_clean_attachment_href_produces_correct_absolute_url() -> None:
+    """Test G: A normal /uploads/ href resolves to the correct absolute URL."""
+    attachments = _adapter_for_degree().get_attachments("162")
+    urls = {a.source_url for a in attachments}
+    assert "https://data.wahooas.org/uploads/tenders/162/plano_aquisicoes_2026.pdf" in urls
+
+
+# Test H — A degree-symbol href does not produce %C2%B0 in any attachment source_url
+def test_degree_href_does_not_produce_percent_c2_b0_in_url() -> None:
+    """Test H: href values containing ° (U+00B0) are rejected before URL construction."""
+    attachments = _adapter_for_degree().get_attachments("162")
+    for a in attachments:
+        assert "%C2%B0" not in a.source_url, (
+            f"Corrupted source_url found: {a.source_url!r}"
+        )
+        assert "\u00b0" not in a.source_url, (
+            f"Literal ° found in source_url: {a.source_url!r}"
+        )
+
+
+# Test I — No repeated ° appended to valid attachment URLs
+def test_no_degree_characters_appended_to_valid_attachment_urls() -> None:
+    """Test I: The clean upload URL is not affected by the degree-href on the same page."""
+    attachments = _adapter_for_degree().get_attachments("162")
+    clean = next(
+        (a for a in attachments if "plano_aquisicoes_2026.pdf" in a.source_url),
+        None,
+    )
+    assert clean is not None, "Clean attachment should still be discovered"
+    assert "\u00b0" not in clean.source_url
+    assert "°" not in clean.source_url
+    assert "%C2%B0" not in clean.source_url
+
+
+# Test J — Existing valid attachment URLs from the PT fixture remain unchanged
+def test_existing_valid_pt_attachment_urls_unchanged() -> None:
+    """Test J: The PT fixture's clean URL is unchanged — the fix is purely additive."""
+    detail = _adapter({DETAIL_PT: "detail_pt.html"}).get_detail("162")
+    attachments = detail.attachments
+    assert len(attachments) == 1
+    assert attachments[0].source_url == (
+        "https://data.wahooas.org/uploads/tenders/162/plano_aquisicoes_2026.pdf"
+    )
+    assert "\u00b0" not in attachments[0].source_url
+
+
+# Test K — Only the clean document is returned; the degree-href link is silently dropped
+def test_degree_href_link_is_excluded_exactly_one_clean_attachment_returned() -> None:
+    """Test K: degree href is dropped; exactly the one clean /uploads/ link is returned."""
+    attachments = _adapter_for_degree().get_attachments("162")
+    # Exactly one attachment: the clean PDF; the CMS degree-href link is excluded
+    assert len(attachments) == 1
+    assert attachments[0].filename == "plano_aquisicoes_2026.pdf"
+    assert attachments[0].source_url.endswith("/uploads/tenders/162/plano_aquisicoes_2026.pdf")

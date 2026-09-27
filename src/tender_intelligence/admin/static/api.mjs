@@ -26,8 +26,7 @@ import { cloneFixture, DEMO_SCENARIOS, FIXTURE_DATA } from "./fixtures.mjs";
 
 const SAFE_MESSAGES = {
   // Live API error codes
-  authentication_required: "Sign in to access the administration console.",
-  authorization_denied: "Your account does not have permission for this operation.",
+  authorization_denied: "The Admin API or its deployment policy denied this operation.",
   not_found: "The requested record was not found.",
   source_name_conflict: "A source with that name already exists.",
   llm_profile_name_conflict: "An LLM profile with that name already exists.",
@@ -42,6 +41,14 @@ const SAFE_MESSAGES = {
   source_dry_run_contract_violation: "Source test returned unexpected persisted state.",
   llm_test_unavailable: "LLM connection test is unavailable (no LLM client factory configured).",
   provider_test_failed: "The LLM connection test failed. Check provider configuration.",
+  provider_authentication_failed: "The provider rejected the API key or account authorization.",
+  provider_request_rejected: "The provider rejected the request. Check the model identifier and request options.",
+  provider_payload_too_large: "The provider rejected the request because its payload was too large.",
+  provider_unreachable: "The provider endpoint could not be reached. Check network access and the base URL.",
+  provider_server_error: "The provider returned a server error. Retry later or check provider status.",
+  ai_call_timeout: "The provider did not respond before its configured timeout.",
+  timeout_before_http_response: "The request timed out before the provider returned HTTP response headers.",
+  invalid_provider_response: "The provider response was empty or malformed.",
   test_mode_required: "Test Mode must be ON to send test email.",
   active_dev_recipient_required: "An active development/alert recipient is required.",
   test_email_service_unavailable: "Test email service is unavailable.",
@@ -88,12 +95,13 @@ export class ApiError extends Error {
    * @param {Array}    [opts.fields]    Field-level validation errors [{field, message}]
    * @param {string}   [opts.requestId] X-Request-ID / correlation_id from the server
    */
-  constructor({ status = 500, code = "internal_error", fields = [], requestId = null } = {}) {
-    const message = SAFE_MESSAGES[code] ?? "The operation could not be completed.";
+  constructor({ status = 500, code = "internal_error", category = null, fields = [], requestId = null } = {}) {
+    const message = SAFE_MESSAGES[category] ?? SAFE_MESSAGES[code] ?? "The operation could not be completed.";
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.category = category;
     this.fields = Array.isArray(fields) ? fields : [];
     this.requestId = requestId;
     this.retryable = status === 503 || status === 0;
@@ -104,40 +112,17 @@ export class ApiError extends Error {
 
 const API_BASE = "/api/v1";
 const REQUEST_TIMEOUT_MS = 30_000;
-
-// Auth state: kept in module scope, never in browser storage.
-// In dev/test the API accepts X-Test-Actor / X-Test-Role headers.
-// In production an actual session cookie / Authorization header is provided by
-// the actor_resolver installed on app.state.  The UI sends whatever headers
-// the server currently accepts; the server is authoritative.
-let _testActor = null;
-let _testRole = null;
-
-/**
- * Configure development test-auth headers.  Only effective when the server was
- * started with TI_ADMIN_ENABLE_TEST_AUTH=1 in a non-production environment.
- */
-export function configureTestAuth(actor, role) {
-  _testActor = actor;
-  _testRole = role;
-}
-
-function _authHeaders() {
-  const h = {};
-  if (_testActor) {
-    h["X-Test-Actor"] = _testActor;
-    h["X-Test-Role"] = _testRole || "viewer";
-  }
-  return h;
-}
+// Provider calls use the saved profile's timeout (up to 600 seconds), plus a small
+// response/serialization margin. A 30-second browser abort would hide the provider result.
+const PROVIDER_TEST_TIMEOUT_MS = 610_000;
 
 async function _request(method, path, body, signal) {
   const url = `${API_BASE}${path}`;
   const init = {
     method,
-    headers: { ..._authHeaders(), "Accept": "application/json" },
+    headers: { "Accept": "application/json" },
     signal,
-    credentials: "same-origin",
+    credentials: "omit",
   };
   if (body !== undefined && body !== null) {
     init.headers["Content-Type"] = "application/json";
@@ -171,34 +156,33 @@ async function _request(method, path, body, signal) {
       message: String(f.message ?? "Invalid value"),
     })) : [];
     const requestId = response.headers.get("X-Correlation-ID") ?? response.headers.get("X-Request-ID") ?? err.correlation_id ?? null;
-    throw new ApiError({ status: response.status, code, fields, requestId });
+    const category = typeof err === "object" && /^[A-Za-z0-9_]{1,64}$/.test(err.category || "")
+      ? err.category
+      : null;
+    throw new ApiError({ status: response.status, code, category, fields, requestId });
   }
   return data;
 }
 
-function _withTimeout(fn) {
+function _withTimeout(fn, timeoutMs = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   return fn(controller.signal).finally(() => clearTimeout(timer));
 }
 
 export class LiveAdminApi {
   /**
-   * Connection state: "live" | "offline" | "auth_required" | "forbidden"
+   * Connection state: "live" | "offline" | "forbidden"
    */
   constructor() {
     this.connectionState = "live";
-    // Keep a reference to the current authenticated actor's role so the UI
-    // can gate Admin-only screens without an extra round-trip.
-    this.role = "viewer";
   }
 
   async _call(method, path, body) {
-    try { return await _withTimeout((signal) => _request(method, path, body, signal)); }
-    catch (error) {
-      if (error instanceof ApiError && error.status === 401) this.connectionState = "auth_required";
-      throw error;
-    }
+    const timeout = /^\/llm\/profiles\/\d+\/test$/.test(path)
+      ? PROVIDER_TEST_TIMEOUT_MS
+      : REQUEST_TIMEOUT_MS;
+    return _withTimeout((signal) => _request(method, path, body, signal), timeout);
   }
 
   async get(path) { return this._call("GET", path); }
@@ -220,15 +204,14 @@ export class LiveAdminApi {
     });
   }
 
-  /** Probe the API to confirm connectivity and extract role from the response. */
+  /** Probe the API to confirm connectivity. */
   async probe() {
     try {
       await this.get("/sources/supported-types");
       this.connectionState = "live";
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.status === 401) this.connectionState = "auth_required";
-        else if (err.status === 403) this.connectionState = "forbidden";
+        if (err.status === 403) this.connectionState = "forbidden";
         else if (err.status === 0 || err.status === 404) this.connectionState = "offline";
         else this.connectionState = "live"; // server up but different error
       } else {
@@ -238,21 +221,6 @@ export class LiveAdminApi {
     return this.connectionState;
   }
 
-  /** Detect current actor role by reading settings (viewer sees fewer fields). */
-  async detectRole() {
-    try {
-      const data = await this.get("/settings");
-      // Admin sees monthly_ai_budget; viewer gets null from the API.
-      // A better signal: try a lightweight admin-only endpoint.
-      // We use /audit (admin-only) as the role probe.
-      await this.get("/audit?offset=0&limit=1");
-      this.role = "admin";
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 403) this.role = "viewer";
-      else this.role = "viewer"; // conservative
-    }
-    return this.role;
-  }
 }
 
 // ── FixtureAdminApi (offline preview / unit tests) ────────────────────────────
@@ -266,7 +234,6 @@ const matchId = (path, expression) => path.match(expression)?.[1];
 export class FixtureAdminApi {
   constructor() {
     this.scenario = "standard";
-    this.role = "admin";
     this.data = cloneFixture(FIXTURE_DATA);
     this.nextId = 300;
     // Compatibility: same connectionState field so the UI can check uniformly.
@@ -278,10 +245,7 @@ export class FixtureAdminApi {
     this.scenario = scenario;
   }
 
-  setRole(role) {
-    if (!["admin", "viewer"].includes(role)) throw new TypeError("Unknown demo role.");
-    this.role = role;
-  }
+
 
   async get(path) { return this.request("GET", path); }
   async post(path, body = {}) { return this.request("POST", path, body); }
@@ -297,8 +261,9 @@ export class FixtureAdminApi {
 
     const path = url.pathname;
     if (method === "GET") return this.read(path, url.searchParams);
-    if (this.role !== "admin") throw new ApiError({ status: 403, code: "authorization_denied" });
     if (path === "/sources" && method === "POST") return this.create("/sources", body);
+    if (/^\/sources\/\d+\/run$/.test(path) && method === "POST") return this.beginFixtureOperation("manual_source", { source_id: Number(path.split("/")[2]) });
+    if (/^\/tenders\/\d+\/process$/.test(path) && method === "POST") return this.beginFixtureOperation("manual_tender", { tender_id: Number(path.split("/")[2]) });
     if (path === "/knowledge-base/versions" && method === "POST") return this.uploadKbFixture(body);
     if (path === "/llm/profiles" && method === "POST") return this.saveProfile(null, body);
     if (path === "/recipients" && method === "POST") return this.create("/recipients", body);
@@ -346,6 +311,8 @@ export class FixtureAdminApi {
   }
 
   read(path, query) {
+    const operationId = matchId(path, /^\/operations\/(demo-operation-\d+)$/);
+    if (operationId) return cloneFixture(this.data[`/operations/${operationId}`]);
     if (path === "/tenders") {
       let items = this.collection(path);
       if (this.scenario === "empty") items = [];
@@ -383,6 +350,13 @@ export class FixtureAdminApi {
   }
 
   collection(path) { return this.data[path]?.items || []; }
+
+  beginFixtureOperation(trigger, details) {
+    const correlation_id = `demo-operation-${this.nextId++}`;
+    const record = { correlation_id, trigger, ...details, status: "COMPLETED", run_history_id: null, stages: { "04-discovery": "COMPLETED", "05-dedup": "COMPLETED", "13-verdict": "COMPLETED", "15-notification": "COMPLETED" }, error_code: null };
+    this.data[`/operations/${correlation_id}`] = record;
+    return cloneFixture(record);
+  }
 
   emptyValue(path) {
     if (path === "/health/dashboard") return { health_status: "unknown", as_of: new Date().toISOString(), verdict_counts: { "7d": 0, "30d": 0 }, notification_failures: { "7d": 0, "30d": 0 }, stuck_notification_count: 0, open_alert_count: 0, sources: [], provider_chain: [] };
@@ -469,7 +443,6 @@ export class FixtureAdminApi {
 
   // Probe always succeeds for the fixture client.
   async probe() { return "fixture"; }
-  async detectRole() { return this.role; }
 }
 
 // Backward-compat export alias so existing tests (`new AdminApi()`) keep working.
@@ -481,23 +454,16 @@ export { FixtureAdminApi as AdminApi };
  * Probe the server and return a LiveAdminApi if reachable, otherwise FixtureAdminApi.
  *
  * @param {object} [opts]
- * @param {string} [opts.testActor]  X-Test-Actor header value for dev auth
- * @param {string} [opts.testRole]   X-Test-Role header value for dev auth
  * @returns {Promise<LiveAdminApi|FixtureAdminApi>}
  */
-export async function createApi({ testActor = null, testRole = null } = {}) {
-  if (testActor) configureTestAuth(testActor, testRole || "viewer");
+export async function createApi() {
   const live = new LiveAdminApi();
   const state = await live.probe();
   if (state === "offline") {
     // Could not reach the server at all — fall back to fixtures.
     return new FixtureAdminApi();
   }
-  // Server is reachable (may be auth_required/forbidden — UI handles that state).
-  if (state === "live" || state === "auth_required") {
-    if (state === "live") await live.detectRole();
-    return live;
-  }
+  if (state === "live" || state === "forbidden") return live;
   return live;
 }
 

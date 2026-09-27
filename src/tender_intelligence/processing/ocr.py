@@ -9,6 +9,13 @@ rewriting the PDF pipeline.
 Availability is probed, never assumed: with no Tesseract binary present the engine reports
 unavailable and the caller records ``ocr_failed`` for that document rather than fabricating text
 (prompt 09 §5, §20).
+
+Production composition calls :func:`default_ocr_engine` rather than passing ``None``. That
+distinction is the whole point of this seam: a scanned tender is the *normal* case in this domain,
+so shipping composition that never passes an engine would mean every scanned document silently
+fails in production while unit tests pass against a stub. The factory probes once and returns the
+Tesseract engine only when it is actually usable, so an operator without the binary still gets a
+correct ``ocr_failed`` record rather than a crash at startup.
 """
 
 from __future__ import annotations
@@ -46,9 +53,10 @@ class OcrEngine(ABC):
 class TesseractOcrEngine(OcrEngine):
     """Tesseract via :mod:`pytesseract` — the non-vision default for scanned PDFs.
 
-    ``lang`` is a Tesseract traineddata code (``eng``/``fra``/``por``). Language cannot be detected
-    before OCR, so the configured default is used and the language is then detected from the OCR'd
-    text and recorded as document metadata (prompt 09 §10).
+    ``lang`` is a Tesseract traineddata code (``eng``/``fra``/``por``/``deu``/``spa``/etc.).
+    Language cannot be detected before OCR, so the configured default is used and the language
+    is then detected from the OCR'd text and recorded as document metadata (prompt 09 §10).
+    Additional languages can be added by passing the appropriate Tesseract code.
     """
 
     name: ClassVar[str] = "tesseract"
@@ -93,8 +101,20 @@ class TesseractOcrEngine(OcrEngine):
         except OcrUnavailableError:
             raise
         except Exception as exc:  # engine faults are library-specific and numerous; a
-            # per-document failure must be recorded, never abort the tender (prompt 09 §16).
+        # per-document failure must be recorded, never abort the tender (prompt 09 §16).
             raise OcrFailedError(
                 f"tesseract OCR failed: {type(exc).__name__}",
                 context={"engine": self.name, "exception": type(exc).__name__},
             ) from exc
+
+
+def default_ocr_engine(*, lang: str = "eng") -> OcrEngine | None:
+    """The engine production composition should use, or ``None`` when OCR is not installed.
+
+    Returns the probed Tesseract engine rather than an unprobed one, so a missing binary surfaces
+    as a per-document ``ocr_failed`` outcome with a recorded reason (prompt 09 §5, §20) instead of
+    an import error or a startup crash. Returning ``None`` here is the same as passing no engine
+    at all: scanned pages are then recorded as failed rather than silently returned as empty.
+    """
+    engine = TesseractOcrEngine(lang=lang)
+    return engine if engine.is_available() else None

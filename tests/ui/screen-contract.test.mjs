@@ -22,13 +22,19 @@ test("all ten Admin UI destinations have renderers and use the live API factory"
 
 test("live shell does not present fixture controls or claim that all actions are simulations", () => {
   assert.match(html, /id="demo-banner"[^>]*hidden/);
-  assert.match(html, /id="demo-role-control"[^>]*hidden/);
   assert.match(html, /id="scenario-control"[^>]*hidden/);
-  assert.match(app, /Authentication required/);
+  assert.doesNotMatch(app, /Authentication required|Sign in|Session expired/);
   assert.match(app, /state\.live = api instanceof LiveAdminApi/);
   assert.match(app, /Run source dry run/);
   assert.match(app, /Send a \[TEST\] email/);
   assert.doesNotMatch(app, /api\.data\["\/recipients"\]/);
+});
+
+test("Admin UI opens without login and does not render identity controls", () => {
+  assert.doesNotMatch(app, /devAuth|testActor|testRole|actor-role|auth_required/);
+  assert.doesNotMatch(html, /demo-role|actor-role|sign in|log in/i);
+  assert.match(app, /await renderers\[state\.page\]\(\)/);
+  assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important;/);
 });
 
 test("UI security guardrails avoid dynamic HTML, browser storage, and inline styles", () => {
@@ -42,10 +48,9 @@ test("UI security guardrails avoid dynamic HTML, browser storage, and inline sty
   assert.match(css, /prefers-reduced-motion/);
 });
 
-test("Viewer restrictions remain server-authoritative and offline role is visibly a preview", () => {
-  assert.match(api, /detectRole\(\)/);
-  assert.match(app, /state\.role !== "admin"/);
-  assert.match(app, /Preview role · \$\{role\}/);
+test("operational protections remain while identity RBAC is deferred", () => {
+  assert.doesNotMatch(api, /detectRole|X-Test-Actor|X-Test-Role/);
+  assert.doesNotMatch(app, /state\.role|Viewer access is read-only/);
   assert.match(app, /Turn Test Mode OFF\?/);
 });
 

@@ -1,0 +1,16 @@
+PROMPT 14 INDEPENDENT REVERIFICATION
+====================================
+GATE: PROMPT 14: NEEDS FIXES
+
+HIGH integration defect remains: worker/main.py main() never calls build_pipeline() or runs the worker. The new test calls build_pipeline(), then replaces its coordinator with a manually wired RunCoordinator.
+
+The coordinator still accepts verdict_handoff=None and records: "no Stage B engine configured".
+The verdict validator checks model-provided requirements against model-provided assessments; it does not independently establish requirement completeness.
+
+Tests:
+- Verdict engine integration: 8 collected, 8 passed.
+- Orchestrator integration: 24 collected, 24 passed; the new PASS/DISCARD/FAIL tests use manually constructed offline coordinators.
+- Full repository: 627 collected, 626 passed, 1 failed, 0 skipped.
+- Failure: tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt (known Prompt 12.1/deadline regression; isolated rerun also failed).
+
+No product/test/configuration changes, production credentials, real LLM calls, paid calls, or business emails. See prompt-14-reverification-report.md for evidence and requirement classifications.

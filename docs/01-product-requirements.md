@@ -132,8 +132,7 @@
 | Admin web app (thin) over shared database, for non-technical operators. | **MUST** | v1.1 §4.1, §5.11. |
 | Screens: Health dashboard, Sources, Tenders (+ per-tender timeline), Knowledge base, LLM providers, Recipients, Mail providers, Triage & urgency, Settings, Audit log. | **MUST** (as specified screens) | v1.1 §5.11. |
 | Admin app must not run crawls inline; test actions are dry runs. | **MUST** | v1.1 §4.1. |
-| Authenticated users only, with at least Admin and Viewer roles; KB and secrets never exposed to Viewers. | **SHOULD** ([PROPOSED]) | v1.1 §5.11. |
-| Exact login method and who gets access is an open question. | **NEEDS_DECISION** | v1.1 §12.3 #9. |
+| Application-level login/identity. | **DEFERRED** | Owner decision recorded in `docs/13-open-decisions.md` O11; not required for the current internal-tool version. |
 
 ## Audit / history
 

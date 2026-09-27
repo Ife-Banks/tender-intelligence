@@ -52,6 +52,7 @@ from tender_intelligence.processing.service import DocumentProcessingService
 from tender_intelligence.sources.policy import CrawlPolicy
 from tender_intelligence.sources.polite import PoliteHttpClient
 from tender_intelligence.storage.local import LocalFileSystemStorage
+from tender_intelligence.verdict.runtime import build_verdict_handoff
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "sources" / "waho"
 
@@ -404,6 +405,7 @@ def build_harness(
     retry_attempts: int = 2,
     sleeper: Any = None,
     coordinator_overrides: dict[str, Any] | None = None,
+    verdict_client_factory: Any | None = None,
 ) -> Harness:
     """Wire the whole prompt-10 pipeline over an offline transport.
 
@@ -443,6 +445,10 @@ def build_harness(
     }
     if sleeper is not None:
         coordinator_kwargs["sleeper"] = sleeper
+    if verdict_client_factory is not None:
+        coordinator_kwargs["verdict_handoff"] = build_verdict_handoff(
+            session_factory, storage, verdict_client_factory
+        )
     coordinator_kwargs.update(coordinator_overrides or {})
     coordinator = RunCoordinator(**coordinator_kwargs)
     worker = Worker(coordinator=coordinator, scheduler=scheduler)

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from tender_intelligence.audit.alert_manager import AlertDelivery
 from tender_intelligence.db.models.mail import NotificationLog

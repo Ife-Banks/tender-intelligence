@@ -87,7 +87,7 @@ Phase 5 is not part of the initial implementation.
 
 ## How to identify unresolved decisions
 
-Read `docs/13-open-decisions.md`. Every item has a decision statement, why it matters, status, options, who should decide, and impact. If a task depends on one, implement a marked configuration default and flag it to the human rather than choosing a business value. Key unresolved items: actual recipients, sender mailbox, Sendlib Free vs Pro, mail providers 2–3, target sectors/regions/minimum value, monthly AI budget, storage location, admin users, and production LLM data-handling approval.
+Read `docs/13-open-decisions.md`. Every item has a decision statement, why it matters, status, options, who should decide, and impact. If a task depends on one, implement a marked configuration default and flag it to the human rather than choosing a business value. Key unresolved items: actual recipients, sender mailbox, Sendlib Free vs Pro, mail providers 2–3, target sectors/regions/minimum value, monthly AI budget, storage location, and production LLM data-handling approval. Application login is deferred under O11 and is not a current blocker.
 
 ## Where to start
 
@@ -110,6 +110,9 @@ uv run pytest                        # run the test suite (SQLite, offline)
 uv run python -m tender_intelligence.worker         # run the worker bootstrap
 uv run python -m tender_intelligence.admin          # run the admin API on :8000
 ```
+
+Open `/admin/` after starting the backend. Application-level login is intentionally deferred
+for this internal-tool version; keep the service within the intended private/internal deployment.
 
 `.env.example` documents every supported variable. By default `TI_DATABASE_URL` points at
 SQLite (`sqlite+pysqlite:///./data/dev.db`); delete that file to reset the dev database.

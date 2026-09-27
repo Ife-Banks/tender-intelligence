@@ -29,16 +29,30 @@ class LLMProfile(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    protocol: Mapped[str] = mapped_column(String(32), nullable=False, default="openai_compatible")
     base_url: Mapped[str] = mapped_column(String(1024), nullable=False)
     api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     model: Mapped[str] = mapped_column(String(255), nullable=False)
     context_window_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=8000)
     max_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
+    top_p: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reasoning_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    enable_thinking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     extra_headers: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     supports_json: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     supports_vision: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    supports_response_format: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    supports_include_reasoning: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    supports_chat_template_kwargs: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    supports_reasoning_effort: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
     cost_per_1k_input: Mapped[float | None] = mapped_column(Float, nullable=True)
     cost_per_1k_output: Mapped[float | None] = mapped_column(Float, nullable=True)
     approved_for_company_docs: Mapped[bool] = mapped_column(
@@ -95,3 +109,4 @@ class LLMCall(Base, TimestampMixin):
     run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     provider: Mapped[str | None] = mapped_column(String(255), nullable=True)
     model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    request_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

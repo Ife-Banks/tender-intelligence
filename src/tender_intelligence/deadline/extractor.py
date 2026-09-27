@@ -21,8 +21,6 @@ from typing import Final
 
 from tender_intelligence.deadline.model import (
     EVIDENCE_TEXT_LIMIT,
-    REASON_MISSING_TIMEZONE,
-    REASON_NOT_FOUND_IN_DOCUMENTS,
     REASON_UNPARSEABLE,
     SOURCE_DOCUMENT,
     DeadlineResult,

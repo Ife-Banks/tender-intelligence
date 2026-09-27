@@ -1,0 +1,44 @@
+SOURCE TYPES: IMPLEMENTED — READY FOR INDEPENDENT VERIFICATION
+
+All five v1.1 source strategies are now implemented, registered and independently tested. No live source was added, configured or contacted; every strategy runs against an injected in-process transport, so the evidence below is reproducible offline.
+
+STRATEGIES
+- paginated_html_list -> PaginatedHtmlAdapter (WahoPaginatedAdapter kept as the compatibility alias)
+- filtered_html       -> FilteredHtmlAdapter
+- search_form         -> SearchFormAdapter
+- rss_atom            -> FeedAdapter
+- json_api            -> JsonApiAdapter
+- wahoo               -> legacy alias of the paginated adapter, still registered
+
+AdapterRegistry.default().source_types reports exactly those six keys, and every SourceType is supported.
+
+WHAT MAKES THEM ONE IMPLEMENTATION RATHER THAN FIVE
+- One normalization path (text, whitespace, reference, absolute URL, timestamp, identity) shared by all five, so two strategies cannot disagree about what a title or an external_id is.
+- One polite transport. Every HTTP method, including a form submission, an authenticated JSON GET, a JSON POST body, a feed read and inherited HTML detail/attachment reads, goes through the same injected transport, so robots, user-agent, pacing, timeout, retry/backoff and Retry-After cannot be bypassed.
+- Provenance on every listing and detail: source, URL, correlation id, crawl timestamp.
+- An archive is one attachment; inner files are never enumerated.
+- Per-crawl external_id dedupe is unconditional inside each adapter. stop_when_no_new_items only controls termination; persisted dedupe and update classification stay in DedupService.
+
+PER-STRATEGY BEHAVIOUR WORTH NAMING
+- Paginated HTML: cross-page dedupe, page cap, visited-URL set, optional no-new-items stopping, selector lists.
+- Filtered HTML: the configured facet combination is applied through query parameters, then the same page cap, visited set and cross-page dedupe.
+- Search form: submission goes through an injected FormDriver. requires_browser fails explicitly with SOURCE_NOT_RUNNABLE unless a browser-capable driver is supplied; a plain Requester never satisfies it. No browser dependency was added.
+- RSS/Atom: RSS, RDF and Atom including content:encoded, dc:creator, dc:date, category and enclosure; a linkless feed entry falls back to the feed URL for identity.
+- JSON API: items_path and per-field paths that accept candidate lists, nested detail_paths, page/offset/cursor pagination bounded by page cap, visited URLs and a declared total, short-page stop, GET or POST with an optional body, auth resolved through AuthResolver and cleared after the crawl, and detail_response_kind json or html.
+
+TESTING
+New suites: filtered HTML 8, search form 12, feed 16, JSON API 32.
+Existing suites still passing: paginated discovery 26, paginated detail 21, configuration-only extensibility 1.
+Focused source suite: 116 passed.
+Configuration-only acceptance test passed: two differently configured sources of one type build as the same adapter class with independent selectors, URLs, detail templates and query parameters, and dedup stays source-scoped.
+
+GATES
+Ruff: passed on sources, registry, interface and all four new test files.
+Mypy: no new errors. Three pre-existing _parse_deadline inference errors remain in waho.py (lines 608, 609, 628); each was verified to sit outside every added or changed diff hunk, so they were not introduced here and were not modified.
+Full suite: 703 passed, 1 failed, 1 warning in 353.9s. The sole failure is the known out-of-scope Prompt 12.1 regression, tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt, whose source carries replacement characters so the French accented pattern cannot match. It was not modified.
+
+LIMITATIONS
+- A source needing a browser still cannot run until a browser-capable FormDriver is supplied; it fails loudly rather than pretending.
+- A JSON API that declares no page size cannot know its own end, so it relies on the page cap or an empty page; declaring page_size, limit or per_page gives a short-page stop.
+- A deadline with no explicit offset, Z or UTC marker is rejected rather than silently assumed to be UTC.
+- Auth is supported through AuthResolver references only; no new credential store was added, and plaintext secrets never enter configuration, logs, listing metadata or retained adapter state.

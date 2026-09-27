@@ -1,0 +1,32 @@
+{
+  "gate": "KNOWLEDGE BASE & RETRIEVAL: IMPLEMENTED — READY FOR INDEPENDENT VERIFICATION",
+  "retrieval": {
+    "strategy": "deterministic keyword overlap over heading-delimited immutable KB snapshot sections and optional document metadata",
+    "default_max_items": 8,
+    "default_max_chars": 12000,
+    "semantic_search": false,
+    "vector_database_added": false
+  },
+  "provenance": ["knowledge_base_version_id", "selected_item_ids", "headings", "document_type", "retrieval_signals"],
+  "stage_b": {
+    "retrieval_occurs_after_requirement_extraction": true,
+    "only_retrieved_evidence_sent_to_verdict_call": true,
+    "empty_result_means": "no evidence on file; does not establish absence",
+    "existing_provider_test_mode_budget_schema_evidence_and_incomplete_input_gates_preserved": true
+  },
+  "admin": {
+    "existing_versioned_upload_and_storage_reused": true,
+    "metadata_fields": ["document_type", "date", "tags", "summary", "source", "structured_metadata"],
+    "duplicate_content_rejected": true
+  },
+  "tests": {
+    "focused_passed": 33,
+    "commands": [
+      "pytest tests/unit/test_kb_retrieval.py tests/integration/test_verdict_engine.py tests/integration/test_admin_api_prompt15.py tests/integration/test_admin_ui_api_prompt16b.py --basetemp .pytest-kb-final -p no:cacheprovider",
+      "ruff check changed KB and verdict files"
+    ],
+    "full_suite_run": false
+  },
+  "business_content": "Authoritative OPEX knowledge base remains to be supplied; no company facts were invented.",
+  "migration": "0013_kb_retrieval_provenance"
+}

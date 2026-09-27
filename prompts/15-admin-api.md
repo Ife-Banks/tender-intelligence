@@ -1,10 +1,18 @@
 # Prompt 15 — Admin API
 
+> **Current scope amendment (Prompt 16C):** This amendment supersedes every conflicting
+> authentication, actor, Admin/Viewer, and test-auth requirement in this historical prompt.
+> Application login/identity authentication and
+> Admin/Viewer identity roles are deferred for the current internal-tool version. Implement
+> routes without an application-session gate or fake actor. Preserve server-side safety
+> controls, secret non-return, validation, Test Mode, and audit with the `internal-admin-api`
+> channel attribution. `docs/13-open-decisions.md` O11 is non-blocking.
+
 > Paste `prompts/00-master-context.md` first.
 
 ## Objective
 
-Implement the **Admin API**: the authenticated read/write control surface that the Admin UI will consume in the next prompt.
+Implement the **Admin API**: the internal no-login read/write control surface that the Admin UI will consume in the next prompt.
 
 The Admin API must be a **thin API layer over the existing shared database and existing domain/service boundaries**.
 
@@ -52,7 +60,7 @@ Read:
 
 Pay particular attention to:
 
-* O11 — admin users/authentication
+* O11 — application login is deferred and non-blocking for this version
 * O3/O4/O9/O12
 
 Do **not** invent decisions for unresolved open decisions.
@@ -72,8 +80,7 @@ Also inspect the actual implementation and tests from:
 
 Prompt 15 owns:
 
-* authentication/authorization boundary exposed by the API
-* Admin/Viewer role enforcement
+* internal no-login access contract from the current O11 scope decision
 * API request validation
 * API response contracts
 * resource CRUD/read endpoints
@@ -100,7 +107,7 @@ Prompt 15 does **not** own:
 * attachment planning
 * Alert Manager internals
 * audit-event persistence internals where Prompt 12 already owns them
-* actual authentication-provider/business-user decisions from O11
+* any future authentication-provider/business-user decision
 * Admin UI
 * RAG/vector search
 
@@ -126,7 +133,7 @@ Before implementation, identify:
 12. Alert Manager
 13. timeline query service
 14. health/run-history query service
-15. existing authentication assumptions
+15. existing API access assumptions and the current O11 scope decision
 
 Produce a short implementation mapping before changing code.
 
@@ -134,63 +141,33 @@ Do not introduce a second ORM, database abstraction, configuration store, or ser
 
 ---
 
-# 4. AUTHENTICATION AND ROLE MODEL
+# 4. APPLICATION ACCESS
 
-O11 is unresolved.
+The current O11 owner decision defers application login and identity authentication. Therefore:
 
-Therefore:
+* do not add an IdP, login flow, actor resolver, Admin/Viewer identity model, or test-auth bypass;
+* normal internal Admin UI/API requests operate without an application session;
+* do not present the internal scope as authorization for public exposure;
+* retain independent server-side safety controls: validation, secret non-return, Test Mode and
+  recipient checks, dry-run semantics, and audit records using `internal-admin-api` attribution.
 
-* do not choose a production authentication provider
-* do not invent a business-user list
-* do not hard-code real administrators
-* do not pretend O11 is resolved
-
-Implement a **config-driven role model** with at least:
-
-```text
-Admin
-Viewer
-```
-
-The API must have an explicit authenticated actor/context abstraction so the eventual authentication mechanism can be attached without redesigning endpoint authorization.
-
-Every protected endpoint must receive an actor identity and role through that abstraction.
-
-For local/test execution, provide a clearly isolated test authentication mechanism if needed.
-
-Do not leave production endpoints accidentally unauthenticated.
+Deployment/network access restrictions remain a separate operational concern.
 
 ---
 
-# 5. AUTHORIZATION MATRIX
+# 5. INTERNAL ACCESS CONTRACT
 
-Define and enforce a central authorization policy.
+Application login and Admin/Viewer identity roles are deferred for the current internal-tool
+version (O11). Normal API operations do not require an application session. Use the existing
+safe response DTOs and preserve independent controls such as validation, secret non-return,
+Test Mode, active development-recipient checks, dry-run behavior, and audit logging.
 
-At minimum:
-
-| Resource/action       |  Admin |                                Viewer |
-| --------------------- | -----: | ------------------------------------: |
-| Health read           |    YES |                                   YES |
-| Sources read          |    YES |                                   YES |
-| Sources write         |    YES |                                    NO |
-| Source dry-run        |    YES |                                    NO |
-| Tenders read          |    YES |                                   YES |
-| Tender timeline read  |    YES |                                   YES |
-| KB read               | per §9 |                                per §9 |
-| KB write              |    YES |                                    NO |
-| LLM providers read    |    YES | restricted according to security spec |
-| LLM provider write    |    YES |                                    NO |
-| Role assignment write |    YES |                                    NO |
-| Recipient read        |    YES |            according to security spec |
-| Recipient write       |    YES |                                    NO |
-| Mail provider read    |    YES | restricted according to security spec |
-| Mail provider write   |    YES |                                    NO |
-| Triage/urgency read   |    YES |                                   YES |
-| Triage/urgency write  |    YES |                                    NO |
-| Settings read         |    YES |            according to security spec |
-| Settings write        |    YES |                                    NO |
-| Audit log read        |    YES |                       according to §9 |
-| Test connection       |    YES |                                    NO |
+| Resource/action | Internal Admin API behavior |
+| --- | --- |
+| Read and configuration writes | Available without an application session; validate and audit writes. |
+| Knowledge Base and tender data | Served by the internal API; do not return provider credentials or storage paths. |
+| Provider/test-email actions | Keep provider configuration checks, Test Mode and development-recipient guards. |
+| Deployment/platform denial | A deployment layer may still return 403; do not model this as an application user role. |
 | Send test email       |    YES |                                    NO |
 
 Do not blindly copy this table if `docs/09` or `docs/10` specifies something different.
@@ -404,18 +381,11 @@ Do not implement RAG/vector search.
 
 Do not silently change KB version semantics.
 
-### Viewer restriction
+### Internal data boundary
 
-Enforce the security specification exactly.
-
-If `docs/09` says viewers cannot see KB contents, then:
-
-* Viewer may receive metadata only if allowed
-* Viewer must not receive KB document content
-* Viewer must not receive raw KB text
-* Viewer must not receive sensitive KB-derived content through another endpoint
-
-Test this through actual API responses.
+There is no current Viewer identity. Do not introduce anonymous RBAC. Keep secrets write-only,
+validate and sanitize response DTOs, keep credentials out of errors/audit values, and retain the
+LLM provider data-policy gate for company KB content.
 
 ### Upload safety
 
@@ -468,13 +438,11 @@ It must:
 * validate the new value
 * persist it
 * create an audit/config-change event
-* identify actor
+* attribute the change to the `internal-admin-api` channel (not a human identity)
 * identify entity
 * record changed field
 * never record provider secret values
 * never expose secrets in the response
-
-Do not allow Viewer access to mutate it.
 
 Verify that Prompt 14's data-policy enforcement reads the same authoritative configuration.
 
@@ -639,10 +607,9 @@ Turning Test Mode OFF is a security-sensitive mutation.
 
 Require:
 
-* Admin authorization
 * explicit action
-* audit record
-* actor identity
+* required reason
+* audit record with the `internal-admin-api` channel attribution
 * changed field
 * timestamp
 
@@ -843,8 +810,8 @@ Define stable API error responses.
 
 Errors should distinguish at least:
 
-* authentication failure
-* authorization failure
+* validation failure
+* external/deployment denial where supplied by the hosting layer
 * validation failure
 * not found
 * conflict
@@ -927,12 +894,11 @@ from the automated test suite.
 
 Implement at least:
 
-### Authentication/authorization
+### No-login access and safeguards
 
-* Admin allowed
-* Viewer allowed where appropriate
-* Viewer blocked from protected writes
-* unauthenticated request rejected
+* no-session reads and normal internal writes reach the endpoint contracts
+* no fake Admin/Viewer or test-auth identity is used
+* Test Mode, active development-recipient checks, validation, secret redaction, and audit remain
 
 ### Sources
 
@@ -960,7 +926,7 @@ Implement at least:
 * version history
 * diff
 * token indicator
-* Viewer restriction
+* no credential or secret values in content/response
 
 ### LLM
 
@@ -995,7 +961,7 @@ Implement at least:
 
 * Test Mode default ON
 * Test Mode OFF requires audit
-* Viewer cannot disable it
+* turning Test Mode OFF requires a reason and audit record
 
 ### Audit
 
@@ -1008,7 +974,7 @@ Implement at least:
 * secret omission from every response
 * secret omission from errors
 * secret omission from audit records
-* authorization enforcement
+* operational safety checks remain server-side without application identity
 
 ---
 
@@ -1017,7 +983,7 @@ Implement at least:
 Create one offline end-to-end Admin API fixture covering:
 
 ```text
-authenticated Admin
+internal no-login Admin API
         ↓
 create/configure source
         ↓
@@ -1146,9 +1112,9 @@ Document which existing services were reused for:
 * audit
 * configuration
 
-## Authorization matrix
+## Access behavior
 
-Show Admin/Viewer behavior.
+Show that normal internal requests work without a session and operational guards remain enforced.
 
 ## Secret review
 
@@ -1178,7 +1144,7 @@ Do not implement the Admin UI.
 
 Do not implement unrelated worker/AI/email functionality.
 
-Do not resolve O11 or other open business decisions.
+Do not revisit deferred O11 or resolve other open business decisions.
 
 After implementation and tests, finish with exactly one:
 

@@ -9,9 +9,13 @@ unusable for this job: a French set containing ``le`` matches inside ``able``/``
 and a Portuguese set containing the single letters ``o``/``a``/``e`` matches nearly every English
 word, so Portuguese would "win" on any document. Tokens are compared whole.
 
+The initial acceptance-test languages are EN/FR/PT (docs/06 §6.2). Additional languages can be
+added to :data:`_STOPWORDS` without source-code changes to the detection logic. The system can
+represent any valid language code; detection coverage depends on the stopword sets configured.
+
 Limitations (documented, not hidden): short documents and documents dominated by
 numbers/proper nouns fall below :data:`MIN_TOKENS` and are reported as unknown rather than
-guessed. Only EN/FR/PT are supported because docs/06 §6.2 names exactly those three.
+guessed. Languages without a configured stopword set cannot be detected (returns unknown).
 """
 
 from __future__ import annotations
@@ -19,8 +23,13 @@ from __future__ import annotations
 import re
 from typing import Final
 
-#: Languages the specification requires (docs/06 §6.2, prompt 09 §10).
-SUPPORTED_LANGUAGES: Final[tuple[str, ...]] = ("en", "fr", "pt")
+#: Initial acceptance-test languages (docs/06 §6.2, prompt 09 §10).
+#: These are the languages tested during acceptance, NOT a hard-coded limitation.
+#: Additional languages can be added to _STOPWORDS without changing detection logic.
+INITIAL_ACCEPTANCE_LANGUAGES: Final[tuple[str, ...]] = ("en", "fr", "pt")
+
+#: Backwards-compatible alias.
+SUPPORTED_LANGUAGES: Final[tuple[str, ...]] = INITIAL_ACCEPTANCE_LANGUAGES
 
 #: Below this many word tokens no guess is trustworthy, so the result is unknown.
 MIN_TOKENS: Final[int] = 20
@@ -69,6 +78,50 @@ _STOPWORDS: Final[dict[str, frozenset[str]]] = {
             "porque", "pois", "tambem", "muito", "todo", "todos", "toda", "todas", "mesmo",
             "depois", "antes", "durante", "cada", "dois", "tres", "pode", "podem", "deve",
             "devem", "ter", "tem", "foi", "foram", "estao", "ha",
+        }
+    ),
+    # Additional languages — extensible without code changes to detection logic.
+    "de": frozenset(
+        {
+            "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer", "eines",
+            "einem", "einen", "und", "oder", "aber", "auch", "als", "am", "an", "auf",
+            "aus", "bei", "bis", "durch", "für", "gegen", "im", "in", "ist", "mit",
+            "nach", "nicht", "noch", "nur", "ohne", "sehr", "sich", "sie",
+            "so", "über", "um", "unter", "vom", "von", "vor", "wenn", "werden",
+            "wie", "wird", "zu", "zum", "zur", "zwei", "drei", "hat", "haben", "kann",
+            "können", "muss", "müssen", "soll", "sollen", "will", "wollen", "dass",
+            "daß", "wurde", "wurden", "worden", "sein", "war", "waren",
+        }
+    ),
+    "es": frozenset(
+        {
+            "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "en",
+            "y", "o", "u", "a", "al", "con", "sin", "por", "para", "que", "quien",
+            "cuyo", "cuya", "donde", "cuando", "como", "pero", "mas", "aunque",
+            "si", "no", "sí", "también", "tampoco", "muy", "mucho", "muchos",
+            "mucha", "muchas", "todo", "todos", "toda", "todas", "otro", "otros",
+            "otra", "otras", "mismo", "misma", "mismos", "mismas", "ser", "estar",
+            "fue", "fueron", "era", "eran", "ha", "han", "hay", "tiene", "tienen",
+            "puede", "pueden", "debe", "deben", "hacer", "hecho", "entre", "sobre",
+            "desde", "hasta", "durante", "cada", "dos", "tres", "es", "son", "está",
+            "están", "estaba", "estaban",
+        }
+    ),
+    "it": frozenset(
+        {
+            "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "di", "del",
+            "della", "dei", "delle", "in", "con", "su", "per", "tra", "fra", "e",
+            "o", "a", "al", "allo", "alla", "ai", "agli", "alle", "che", "chi",
+            "cui", "dove", "quando", "come", "ma", "più", "meno", "molto", "tanto",
+            "troppo", "tutto", "tutti", "tutta", "tutte", "altro", "altri", "altra",
+            "altre", "stesso", "stessa", "stessi", "stesse", "essere", "sono", "è",
+            "era", "erano", "stato", "stata", "stati", "state", "ha", "hanno",
+            "può", "possono", "deve", "devono", "fare", "fatto", "senza", "sotto",
+            "sopra", "dopo", "prima", "ogni",
+            "due", "tre", "questo", "questa", "questi", "queste", "quello", "quella",
+            "quelli", "quelle", "suo", "sua", "suoi", "sue", "mio", "mia", "miei",
+            "mie", "tuo", "tua", "tuoi", "tue", "nostro", "nostra", "nostri", "nostre",
+            "vostro", "vostra", "vostri", "vostre",
         }
     ),
 }

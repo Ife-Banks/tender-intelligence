@@ -27,19 +27,15 @@ Ownership boundaries (Prompt 12.1 §3):
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC
 from typing import Final
 
 from tender_intelligence.deadline.extractor import extract_deadline_from_text
 from tender_intelligence.deadline.model import (
-    CONFLICTING,
-    REASON_CONFLICTING_SOURCES,
     REASON_MISSING_TIMEZONE,
     REASON_NOT_FOUND_IN_DOCUMENTS,
     REASON_NOT_PRESENT_ON_DETAIL,
     REASON_NOT_PRESENT_ON_LISTING,
-    RESOLVED,
-    SOURCE_CONFLICTING,
     SOURCE_DETAIL,
     SOURCE_LISTING,
     DeadlineResult,

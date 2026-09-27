@@ -980,6 +980,347 @@ def test_multi_language_tender_reports_its_languages(
     assert bundle.languages == ["en", "fr"]
 
 
+# --------------------------------------------------------------------------- translation boundary
+
+
+def test_bundle_states_that_no_translation_provider_is_configured(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """Prompt 12 §6 — the mismatch is declared, not left for the consumer to discover."""
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr, storage, tender_id, filename="fr.pdf", data=text_pdf([FRENCH])
+    )
+
+    bundle = _service(session_factory_gr, storage).process_tender(tender_id)
+
+    assert bundle.translation.status == "not_configured"
+    assert bundle.translation.originals_preserved is True
+    assert bundle.translation.limitation
+
+
+def test_the_translation_record_names_the_languages_actually_found(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr, storage, tender_id, filename="fr.pdf", data=text_pdf([FRENCH])
+    )
+    _add_document(
+        session_factory_gr, storage, tender_id, filename="en.pdf", data=text_pdf([ENGLISH])
+    )
+
+    bundle = _service(session_factory_gr, storage).process_tender(tender_id)
+
+    assert set(bundle.translation.source_languages) == {"en", "fr"}
+
+
+def test_a_french_document_is_never_dropped_for_being_untranslated(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """The failure mode prompt 12 §6 rules out: silently discarding non-English content."""
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr, storage, tender_id, filename="fr.pdf", data=text_pdf([FRENCH])
+    )
+
+    bundle = _service(session_factory_gr, storage).process_tender(tender_id)
+
+    document = bundle.extracted_documents[0]
+    assert document.extraction_status == "extracted"
+    assert "Organisation mondiale" in document.text
+    assert bundle.incomplete_inputs is False
+
+
+def test_an_english_only_tender_also_records_the_unconfigured_state(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    # One shape for every consumer, rather than a field that is sometimes absent.
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr, storage, tender_id, filename="en.pdf", data=text_pdf([ENGLISH])
+    )
+
+    bundle = _service(session_factory_gr, storage).process_tender(tender_id)
+
+    assert bundle.translation.status == "not_configured"
+    assert bundle.translation.limitation
+
+
+def test_the_translation_record_survives_the_persisted_artifact(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr, storage, tender_id, filename="fr.pdf", data=text_pdf([FRENCH])
+    )
+    _service(session_factory_gr, storage).process_tender(tender_id)
+
+    payload = json.loads(storage.get(bundle_key(tender_id)))
+
+    assert payload["translation"]["status"] == "not_configured"
+    assert payload["translation"]["originals_preserved"] is True
+    assert payload["translation"]["limitation"]
+
+
+def test_the_reloaded_bundle_carries_the_translation_record(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    from tender_intelligence.processing.representation import TenderDocumentBundle
+
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr, storage, tender_id, filename="fr.pdf", data=text_pdf([FRENCH])
+    )
+    _service(session_factory_gr, storage).process_tender(tender_id)
+
+    reloaded = TenderDocumentBundle.from_dict(
+        json.loads(storage.get(bundle_key(tender_id)))
+    )
+
+    assert reloaded.translation.status == "not_configured"
+    assert reloaded.translation.source_languages == ["fr"]
+
+
+# --------------------------------------------------------------------------- document metadata
+
+
+def test_pdf_metadata_reaches_the_persisted_artifact(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """Prompt 12 §2 — a TOR's title and reference live in ``/Info`` and must survive."""
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    document_id = _add_document(
+        session_factory_gr,
+        storage,
+        tender_id,
+        filename="tor.pdf",
+        data=text_pdf(
+            [ENGLISH],
+            metadata={
+                "title": "RFP - Health Systems Strengthening",
+                "subject": "Ref. WH-AFR-2026-01",
+            },
+        ),
+    )
+    _service(session_factory_gr, storage).process_tender(tender_id)
+
+    payload = json.loads(storage.get(_row(session_factory_gr, document_id).extracted_text_ref))
+
+    assert payload["document_metadata"]["title"] == "RFP - Health Systems Strengthening"
+    assert payload["document_metadata"]["subject"] == "Ref. WH-AFR-2026-01"
+
+
+def test_docx_metadata_reaches_the_persisted_artifact(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    document_id = _add_document(
+        session_factory_gr,
+        storage,
+        tender_id,
+        filename="annex.docx",
+        data=docx_bytes(
+            [FRENCH],
+            properties={"title": "Avis de Demande de Propositions", "author": "Cellule Achats"},
+        ),
+    )
+    _service(session_factory_gr, storage).process_tender(tender_id)
+
+    payload = json.loads(storage.get(_row(session_factory_gr, document_id).extracted_text_ref))
+
+    assert payload["document_metadata"]["title"] == "Avis de Demande de Propositions"
+    assert payload["document_metadata"]["author"] == "Cellule Achats"
+
+
+def test_metadata_never_replaces_the_extracted_text(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr,
+        storage,
+        tender_id,
+        filename="tor.pdf",
+        data=text_pdf([ENGLISH], metadata={"title": "Tender TOR"}),
+    )
+
+    bundle = _service(session_factory_gr, storage).process_tender(tender_id)
+
+    assert "World Health Organization" in bundle.extracted_documents[0].text
+
+
+def test_scanned_document_metadata_survives_ocr(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    # A scan has no text layer, so the declared metadata is the only identity the page has.
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr,
+        storage,
+        tender_id,
+        filename="scan.pdf",
+        data=image_pdf("ANNEX", 1, metadata={"title": "Scanned annex"}),
+    )
+
+    bundle = _service(session_factory_gr, storage, ocr=StubOcrEngine()).process_tender(tender_id)
+
+    assert bundle.extracted_documents[0].document_metadata["title"] == "Scanned annex"
+
+
+# ------------------------------------------------------------------ structure into the bundle
+
+
+def test_table_roles_reach_the_bundle(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr,
+        storage,
+        tender_id,
+        filename="criteria.pdf",
+        data=table_pdf(EVALUATION_MATRIX, caption="Evaluation criteria"),
+    )
+    _add_document(
+        session_factory_gr,
+        storage,
+        tender_id,
+        filename="schedule.docx",
+        data=docx_bytes(["Calendar", DEADLINE_TABLE]),
+    )
+
+    bundle = _service(session_factory_gr, storage).process_tender(tender_id)
+
+    roles = {
+        document.filename: table.role
+        for document in bundle.documents
+        for table in _rows_of(document)
+    }
+    assert roles["criteria.pdf"] == "evaluation"
+    assert roles["schedule.docx"] == "deadline"
+
+
+def test_docx_headings_reach_the_bundle(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr,
+        storage,
+        tender_id,
+        filename="tor.docx",
+        data=docx_bytes(
+            [("heading", 1, "I. Contexte"), FRENCH, ("heading", 2, "A. Calendrier")]
+        ),
+    )
+
+    bundle = _service(session_factory_gr, storage).process_tender(tender_id)
+
+    sections = bundle.extracted_documents[0].sections
+    headings = [section for section in sections if section.is_heading]
+    assert [section.heading_level for section in headings] == [1, 2]
+    assert headings[0].text == "I. Contexte"
+
+
+def _rows_of(document) -> list:
+    """Every table on a document, from whichever structure carries it."""
+    from tender_intelligence.processing.representation import ExtractedTable
+
+    tables: list[ExtractedTable] = []
+    for page in document.pages:
+        tables.extend(page.tables)
+    for section in document.sections:
+        tables.extend(section.tables)
+    return tables
+
+
+# --------------------------------------------------------------------------- ocr reuse
+
+
+def test_a_multipage_scan_is_ocrd_once_per_page_and_never_again(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """§14 — the count is asserted per page, not merely "greater than zero"."""
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr,
+        storage,
+        tender_id,
+        filename="scan.pdf",
+        data=image_pdf("ANNEX", 3),
+    )
+    ocr = StubOcrEngine()
+    service = _service(session_factory_gr, storage, ocr=ocr)
+
+    service.process_tender(tender_id)
+    assert ocr.calls == 3
+
+    service.process_tender(tender_id)
+    assert ocr.calls == 3, "a rerun must not re-OCR a cached multi-page scan"
+
+
+def test_a_rerun_ocrs_only_the_newly_added_document(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    # The realistic case: a tender gains an annex between runs. Reuse must apply per document,
+    # not per tender — reprocessing everything would be as wrong as reprocessing nothing.
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr, storage, tender_id, filename="first.pdf", data=image_pdf("ONE", 2)
+    )
+    ocr = StubOcrEngine()
+    service = _service(session_factory_gr, storage, ocr=ocr)
+
+    service.process_tender(tender_id)
+    assert ocr.calls == 2
+
+    _add_document(
+        session_factory_gr, storage, tender_id, filename="second.pdf", data=image_pdf("TWO", 1)
+    )
+    bundle = service.process_tender(tender_id)
+
+    assert ocr.calls == 3, "only the new document's single page may be OCR'd"
+    assert len(bundle.extracted_documents) == 2
+
+
+def test_a_failed_scan_is_retried_and_can_succeed(
+    session_factory_gr: sessionmaker[Session], tmp_path: Path
+) -> None:
+    # A transient OCR fault must not be cached as a permanent failure.
+    storage = _storage(tmp_path)
+    tender_id = _seed_tender(session_factory_gr)
+    _add_document(
+        session_factory_gr,
+        storage,
+        tender_id,
+        filename="scan.pdf",
+        data=image_pdf("ANNEX", 1),
+    )
+    broken = StubOcrEngine(fail=True)
+    first = _service(session_factory_gr, storage, ocr=broken).process_tender(tender_id)
+    assert first.failed_documents[0].error_code == "ocr_failed"
+
+    working = StubOcrEngine()
+    second = _service(session_factory_gr, storage, ocr=working).process_tender(tender_id)
+    assert working.calls == 1
+    assert second.extracted_documents[0].extraction_status == "extracted"
+
+
 # --------------------------------------------------------------------------- next-stage seam
 
 

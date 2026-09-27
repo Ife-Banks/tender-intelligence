@@ -45,10 +45,27 @@ class LLMResponse:
 class LLMError(Exception):
     """A model call failed or returned invalid output; carries a structured code."""
 
-    def __init__(self, message: str, error_code: str = AI_CALL_TIMEOUT) -> None:
+    def __init__(
+        self,
+        message: str,
+        error_code: str = AI_CALL_TIMEOUT,
+        *,
+        http_status: int | None = None,
+        diagnostic_phase: str | None = None,
+        provider_error_type: str | None = None,
+        provider_error_code: str | None = None,
+        provider_error_param: str | None = None,
+        provider_error_message: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.error_code = error_code
+        self.http_status = http_status
+        self.diagnostic_phase = diagnostic_phase
+        self.provider_error_type = provider_error_type
+        self.provider_error_code = provider_error_code
+        self.provider_error_param = provider_error_param
+        self.provider_error_message = provider_error_message
 
 
 class LLMClient(ABC):

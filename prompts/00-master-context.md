@@ -57,7 +57,7 @@ You are an AI coding agent implementing the **Tender Intelligence** system for O
 
 ## No-invention rule
 
-- Do not invent: recipients, sender mailbox, mail providers 2/3, target sectors/regions, minimum contract value, monthly AI budget, storage location, admin users, production LLM data-handling approval, KB template content. All are open decisions — see `docs/13-open-decisions.md`.
+- Do not invent: recipients, sender mailbox, mail providers 2/3, target sectors/regions, minimum contract value, monthly AI budget, storage location, production LLM data-handling approval, KB template content. These remain open decisions — see `docs/13-open-decisions.md`. Application login/admin user provisioning is deferred under O11 and is not required for current Admin functionality.
 - Do not assume undocumented WAHO behaviour (URLs, DOM, API) — confirm with fixtures/live site or flag it.
 
 ## Your working method

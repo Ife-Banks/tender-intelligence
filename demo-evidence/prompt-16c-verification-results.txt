@@ -1,0 +1,43 @@
+PROMPT 16C INDEPENDENT VERIFICATION RESULTS
+Repository: C:\Users\ifeol\Desktop\Projects\tender-intelligence
+Baseline HEAD: 16b654383a0f6633f8eeaea4bc0bbe9b098bc883
+
+Commands:
+1) .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16c-independent tests/integration/test_admin_api_prompt15.py tests/integration/test_admin_ui_api_prompt16b.py tests/integration/test_admin_api.py tests/ui
+   Result: 20 passed, 0 failed.
+2) node --test tests/ui/*.test.mjs
+   Result: 26 passed, 0 failed.
+3) .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16c-worker tests/integration/test_worker.py tests/integration/test_orchestrator_pipeline.py tests/integration/test_notification_service.py tests/integration/test_audit_security.py
+   Result: 54 passed, 0 failed.
+4) .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16c-independent-full
+   Result: 618 passed, 1 failed. Sole failure: tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt (known unrelated WAHO parser issue).
+
+Actual browser:
+- http://127.0.0.1:8000/admin/ loaded with no login and showed all ten navigation entries, live health dashboard, and Test Mode ON.
+- http://127.0.0.1:8000/admin/?devAuth=1 behaved the same; devAuth is not required and is ignored.
+- Tenders screen loaded its normal UI shell but its data request failed safely due to API 500.
+
+Actual HTTP (no application session, no Authorization header; no WWW-Authenticate):
+200 GET /health
+200 GET /api/v1/sources/supported-types
+200 GET /api/v1/sources
+500 GET /api/v1/tenders -> {"error":{"code":"internal_error"}}
+200 GET /api/v1/settings (test_mode=true)
+200 GET /api/v1/triage
+200 GET /api/v1/llm/profiles
+200 GET /api/v1/llm/roles
+500 GET /api/v1/llm/usage -> {"error":{"code":"internal_error"}}
+200 GET /api/v1/recipients
+200 GET /api/v1/mail/providers
+200 GET /api/v1/knowledge-base/versions
+200 GET /api/v1/audit
+200 GET /api/v1/health/dashboard
+
+Safety checks: focused tests passed for Test Mode mail guard, dev recipient restriction, [TEST] subject, write-only credentials, secret redaction, validation, audit attribution, and source dry-run no-write/no-notification behavior. Worker/service integration tests passed. No real provider call or business email was made.
+
+Findings:
+F16C-01 HIGH — actual running /api/v1/tenders and /api/v1/llm/usage return generic 500. Not demonstrated to be caused by 16C; owner likely Prompt 15/runtime DB configuration. Isolated migrated-DB integration tests pass.
+F16C-02 MEDIUM — 403 UI panel still references administrator account roles in src/tender_intelligence/admin/static/app.mjs despite deferred application identity; 403 otherwise represents a possible deployment/network denial.
+
+No product code was changed. Verification artifacts only.
+PROMPT 16C: NEEDS FIXES

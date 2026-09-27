@@ -21,9 +21,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from tender_intelligence.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
+    from tender_intelligence.db.models.deadline import TenderDeadlineResolution
     from tender_intelligence.db.models.documents import Document
     from tender_intelligence.db.models.sources import Source
-    from tender_intelligence.db.models.deadline import TenderDeadlineResolution
 
 TENDER_STATUSES = ("new", "updated", "processed", "verdict_failed", "awaiting_budget", "awaiting_approved_provider")
 

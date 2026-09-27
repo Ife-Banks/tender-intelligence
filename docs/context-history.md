@@ -92,3 +92,13 @@ Final Prompt 11 verification on 2026-09-24: **469 passed, 1 warning in 158.97s**
 mypy are clean; migration tests pass; Alembic is at `0009_provider_usage (head)`. The required
 files `implementation/00-current-state.md`, `implementation/01-decisions.md`, and
 `implementation/02-known-issues.md` were not present in the repository and were not recreated.
+
+## Prompt 16C — Authentication Scope Decision
+
+The project owner deferred application-level login/identity authentication for the current
+internal-tool version. O11 is therefore `DEFERRED / OUT OF CURRENT SCOPE`, is not a blocker,
+and no IdP or fake identity is to be introduced. Admin API/UI operate without an application
+session; the server retains Test Mode, mail-recipient, validation, secret, dry-run, and audit
+safeguards. The Admin runner remains bound to `127.0.0.1:8000`; broader deployment/network
+exposure is not authorized by this decision. See `docs/13-open-decisions.md` O11 and the
+Prompt 16C implementation report. Original v1.1 source-doc statements remain historical.

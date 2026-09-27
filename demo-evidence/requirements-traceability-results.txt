@@ -1,0 +1,58 @@
+REQUIREMENTS TRACEABILITY AUDIT — EXECUTION RECORD
+
+Authoritative specification:
+- source-docs/tender-intelligence-spec-v1.1.md (539 lines; v1.1 dated 2026-09-21)
+- PROJECT_RULES.md confirms v1.1 authority, docs/ as implementation spec, no invented business requirements, and deferred/open-state handling.
+
+Audit mode:
+- Read-only source/doc/migration/test/report inspection.
+- No product code, tests, migrations, prompts, or configuration were modified by this audit.
+- Prompt 17 was not started.
+- Only the three requirements-traceability evidence artifacts were created/updated.
+
+Register:
+- Atomic trace rows: 102.
+- Implementation status counts: VERIFIED 51; IMPLEMENTED — UNVERIFIED 13; PARTIAL 27; MISSING 2; BLOCKED BY OPEN DECISION 2; CONTRADICTED 0; NOT APPLICABLE 7.
+- The separate open-decision table has 12 decision/input rows and is not double-counted as new requirements.
+- The §11 acceptance criteria crosswalk includes all 17 v1.1 bullets and maps them to requirement IDs.
+
+Repository inspection performed:
+- Read the complete source v1.1 Markdown, current project rules, all relevant docs, implementation next-task note, source code module inventory, migrations, test inventory, and existing implementation/independent verification reports.
+- Inspected concrete source/worker, deduplication, acquisition, processing, triage, verdict, notification/mail, Admin, model, and configuration seams.
+- Compared previous independent reports instead of treating implementation reports or code existence as proof.
+- Confirmed working tree was already extensively modified at baseline; did not infer prompt ownership from Git status alone.
+
+Previously executed verification commands used as evidence (no code changed since these runs):
+1. .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16c-independent tests/integration/test_admin_api_prompt15.py tests/integration/test_admin_ui_api_prompt16b.py tests/integration/test_admin_api.py tests/ui
+   20 passed, 0 failed.
+2. node --test tests/ui/*.test.mjs
+   26 passed, 0 failed.
+3. .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16c-worker tests/integration/test_worker.py tests/integration/test_orchestrator_pipeline.py tests/integration/test_notification_service.py tests/integration/test_audit_security.py
+   54 passed, 0 failed.
+4. .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16c-independent-full
+   618 passed, 1 failed. Known unrelated failure: tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt.
+
+Key prior evidence files consulted:
+- demo-evidence/source-extensibility-audit.md
+- docs/08-verification-report.md, docs/09-verification-report.md, docs/10-verification-report.md
+- demo-evidence/prompt-13-verification-report.md
+- demo-evidence/prompt-14-implementation-report.md (no independent Prompt 14 verification report found)
+- demo-evidence/prompt-15-verification-report.md
+- demo-evidence/prompt-16a-verification-report.md
+- demo-evidence/prompt-16b-verification-report.md
+- demo-evidence/prompt-16c-verification-report.md
+- demo-evidence/sendlib-config-report.md
+
+Material gaps requiring follow-up:
+- Generic source-type extensibility and filtered/search-driven examples.
+- Approved KB content/template and KB-derived triage defaults.
+- Independent Prompt 14 behavioral verification.
+- Live provider configuration, provider 2/3 decisions, and end-to-end email/failover evidence.
+- Scanned multilingual document-to-verdict evidence.
+- Production alerts, retention enforcement, and third-party data inventory.
+- Current live Admin API 500s for /api/v1/tenders and /api/v1/llm/usage; stale 403 account-role wording.
+- French WAHO deadline parser failure.
+
+Final gate:
+REQUIREMENTS TRACEABILITY AUDIT: COMPLETE — MANDATORY REQUIREMENTS NOT ALL VERIFIED
+Next action: Plan remediation from GAP-001 and complete outstanding Prompt 14 verification. Do not start Prompt 17 based only on this audit.

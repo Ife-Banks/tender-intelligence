@@ -52,6 +52,7 @@ class Verdict(Base, TimestampMixin):
     knowledge_base_version_id: Mapped[int | None] = mapped_column(
         ForeignKey("knowledge_base_versions.id", ondelete="SET NULL"), nullable=True
     )
+    knowledge_base_evidence: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     incomplete_inputs: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     schema_version: Mapped[str] = mapped_column(String(64), nullable=False, default="verdict.v1")

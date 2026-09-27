@@ -1,4 +1,4 @@
-""":mod:`tender_intelligence.db.models.users` — AdminUser entity (docs/03 §3.2)."""
+""":mod:`tender_intelligence.db.models.users` — reserved legacy AdminUser table (O11 deferred)."""
 
 from __future__ import annotations
 
@@ -11,8 +11,7 @@ ADMIN_ROLES = ("admin", "viewer")
 
 
 class AdminUser(Base, TimestampMixin):
-    """Admin-app account. Viewers never see KB or secrets (docs/03 §3.2, confirmed).
-    Exact login method and account provisioning = open decision (docs/13 O11)."""
+    """Reserved schema artifact from the original v1.1 proposal; current Admin API does not use identities (O11)."""
 
     __tablename__ = "admin_users"
 

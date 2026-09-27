@@ -4,7 +4,7 @@ import { ApiError, createApi, LiveAdminApi } from "../../src/tender_intelligence
 
 const originalFetch = globalThis.fetch;
 
-test("live requests use same-origin credentials and the versioned Admin API", async () => {
+test("live requests omit application credentials and use the versioned Admin API", async () => {
   let captured;
   globalThis.fetch = async (url, init) => {
     captured = { url, init };
@@ -14,7 +14,7 @@ test("live requests use same-origin credentials and the versioned Admin API", as
     const api = new LiveAdminApi();
     await api.get("/sources");
     assert.equal(captured.url, "/api/v1/sources");
-    assert.equal(captured.init.credentials, "same-origin");
+    assert.equal(captured.init.credentials, "omit");
     assert.equal(captured.init.headers.Accept, "application/json");
   } finally { globalThis.fetch = originalFetch; }
 });
@@ -39,7 +39,33 @@ test("POST, PATCH, and DELETE use centralized JSON/204 handling", async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("authentication failure stays live and never falls back to fixture data", async () => {
+test("provider test receives time for its configured provider timeout", async () => {
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let timeoutMs;
+  let signal;
+  globalThis.setTimeout = (_callback, ms) => { timeoutMs = ms; return 1; };
+  globalThis.clearTimeout = () => {};
+  globalThis.fetch = async (_url, init) => {
+    signal = init.signal;
+    return new Response(JSON.stringify({ status: "success" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    await new LiveAdminApi().post("/llm/profiles/3/test", {});
+    assert.equal(timeoutMs, 610_000);
+    assert.ok(signal instanceof AbortSignal);
+    assert.equal(signal.aborted, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
+test("unexpected upstream 401 stays a live API error and never falls back to fixtures", async () => {
   let calls = 0;
   globalThis.fetch = async () => {
     calls += 1;
@@ -48,8 +74,22 @@ test("authentication failure stays live and never falls back to fixture data", a
   try {
     const api = await createApi();
     assert.ok(api instanceof LiveAdminApi);
-    assert.equal(api.connectionState, "auth_required");
+    assert.equal(api.connectionState, "live");
     assert.ok(calls >= 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("API calls do not send simulated actor or role headers", async () => {
+  const captured = [];
+  globalThis.fetch = async (_url, init) => {
+    captured.push(init.headers);
+    return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    await createApi();
+    await createApi();
+    assert.ok(captured.length > 0);
+    assert.ok(captured.every((headers) => !headers["X-Test-Actor"] && !headers["X-Test-Role"] && !headers.Authorization));
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -62,7 +102,6 @@ test("missing API route selects labelled fixture preview, but forbidden remains 
     const api = await createApi();
     assert.ok(api instanceof LiveAdminApi);
     assert.equal(api.connectionState, "forbidden");
-    assert.equal(api.role, "viewer");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -74,6 +113,21 @@ test("403, 404, 409, 429 and 5xx codes are retained without exposing raw detail"
     await assert.rejects(api.get("/fixture"), (error) => error instanceof ApiError && error.status === status && error.code === code && !error.message.includes(raw));
   }
   globalThis.fetch = originalFetch;
+});
+
+test("provider failure returns only the sanitized provider category", async () => {
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ error: { code: "provider_test_failed", category: "provider_authentication_failed" } }),
+    { status: 502, headers: { "content-type": "application/json" } },
+  );
+  try {
+    await assert.rejects(new LiveAdminApi().post("/llm/profiles/1/test", {}), (error) => {
+      assert.ok(error instanceof ApiError);
+      assert.equal(error.category, "provider_authentication_failed");
+      assert.match(error.message, /API key/);
+      return true;
+    });
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("server validation errors are classified without echoing rejected secret values", async () => {

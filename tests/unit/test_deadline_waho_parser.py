@@ -154,3 +154,49 @@ class TestDetailTitleSelectors:
     def test_detail_body_selector_covers_card_body(self):
         adapter = _adapter()
         assert adapter._config["detail_body_selector"] == "div.card-body"
+
+
+# ── Timezone expansion tests (Prompt 16C FIX #3) ─────────────────────────
+
+
+class TestExpandedTimezoneSupport:
+    """CET, CEST, EAT are now recognized timezone abbreviations."""
+
+    def test_cet_timezone_parsed(self):
+        adapter = _adapter()
+        dl, tz, raw = adapter._parse_deadline(
+            "Deadline for submission of applications: 24 September 2026 at 1.00 pm CET."
+        )
+        assert dl is not None
+        assert tz == "CET"
+        assert dl.month == 9
+        assert dl.day == 24
+
+    def test_cest_timezone_parsed(self):
+        adapter = _adapter()
+        dl, tz, raw = adapter._parse_deadline(
+            "Deadline for submission of applications: 24 September 2026 at 1.00 pm CEST."
+        )
+        assert dl is not None
+        assert tz == "CEST"
+        assert dl.month == 9
+        assert dl.day == 24
+
+    def test_eat_timezone_parsed(self):
+        adapter = _adapter()
+        dl, tz, raw = adapter._parse_deadline(
+            "Deadline for submission of applications: 24 September 2026 at 1.00 pm EAT."
+        )
+        assert dl is not None
+        assert tz == "EAT"
+        assert dl.month == 9
+        assert dl.day == 24
+
+    def test_missing_timezone_still_unresolved(self):
+        """No timezone in source → must remain unresolved, never guess."""
+        adapter = _adapter()
+        dl, tz, raw = adapter._parse_deadline(
+            "Deadline for submission of applications: 24 September 2026"
+        )
+        assert dl is None
+        assert raw is not None  # raw text preserved for debugging

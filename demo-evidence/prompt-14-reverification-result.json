@@ -1,0 +1,116 @@
+{
+  "prompt": "14",
+  "verification": "independent_reverification",
+  "repository_head": "16b654383a0f6633f8eeaea4bc0bbe9b098bc883",
+  "verification_date": "2026-09-26",
+  "read_only": true,
+  "production_credentials_used": false,
+  "real_llm_calls": 0,
+  "business_emails_sent": 0,
+  "paid_provider_calls": 0,
+  "status": "NEEDS_FIXES",
+  "ready_to_close": false,
+  "normal_worker_stage_b_wired": false,
+  "worker_main_calls_build_pipeline": false,
+  "coordinator_stage_b_dependency_optional": true,
+  "coordinator_none_stage_b_outcome": "SKIPPED: no Stage B engine configured",
+  "remediation_end_to_end_test_uses_normal_worker_coordinator": false,
+  "triage_gate_verified_in_test_coordinator": true,
+  "triage_gate_verified_in_normal_worker": false,
+  "engine_direct_suite_passed": true,
+  "normal_runtime_stage_b_verified": false,
+  "requirement_completeness_independent_mechanism": false,
+  "known_waho_failure_owner": "Prompt 12.1/deadline",
+  "tests": {
+    "tests/integration/test_verdict_engine.py": {
+      "collected": 8,
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0
+    },
+    "tests/integration/test_orchestrator_pipeline.py": {
+      "collected": 24,
+      "passed": 24,
+      "failed": 0,
+      "skipped": 0
+    },
+    "full_repository_suite": {
+      "collected": 627,
+      "passed": 626,
+      "failed": 1,
+      "skipped": 0,
+      "failures": [
+        "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt"
+      ]
+    },
+    "isolated_waho_regression": {
+      "passed": 0,
+      "failed": 1,
+      "failure": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt"
+    }
+  },
+  "findings": [
+    {
+      "id": "F-14-01",
+      "severity": "HIGH",
+      "requirement": "Normal worker runtime must execute Stage B after Stage A PASS and persist a Verdict.",
+      "status": "FAIL",
+      "ownership": "Prompt 14 normal worker integration",
+      "blocks_prompt_14_closure": true,
+      "evidence": "worker.main does not invoke build_pipeline or start Worker; the new passing test replaces the build_pipeline coordinator with a manually constructed RunCoordinator."
+    },
+    {
+      "id": "F-14-02",
+      "severity": "HIGH",
+      "requirement": "All material tender requirements must be independently represented and assessed.",
+      "status": "FAIL",
+      "ownership": "Prompt 14 evidence/requirement completeness",
+      "blocks_prompt_14_closure": true,
+      "evidence": "Semantic validation checks only model-supplied requirements against model-supplied assessments; no independent completeness mechanism is present."
+    },
+    {
+      "id": "F-12-01",
+      "severity": "KNOWN REGRESSION",
+      "requirement": "French WAHO July GMT deadline parsing.",
+      "status": "FAIL",
+      "ownership": "Prompt 12.1/deadline",
+      "blocks_prompt_14_closure": false,
+      "evidence": "Required isolated test fails because parsed deadline is None; same failure in full suite. No causal link to Prompt 14 remediation established."
+    }
+  ],
+  "requirement_statuses": {
+    "normal_worker_stage_b_wiring": "FAIL",
+    "coordinator_stage_b_mandatory": "FAIL",
+    "production_shaped_pass_to_persisted_verdict": "FAIL",
+    "pass_discard_fail_triage_gating": "PARTIAL",
+    "durable_stage_b_failure_and_correlation": "PARTIAL",
+    "alert_hook_behavior": "PARTIAL",
+    "schema_enum_and_required_fields": "PARTIAL",
+    "material_requirement_completeness": "FAIL",
+    "evidence_citations_and_no_evidence_wording": "PARTIAL",
+    "validation_retry_accounting": "PARTIAL",
+    "transport_retry_and_fallback_matrix": "PARTIAL",
+    "actual_document_failure_to_incomplete_inputs": "UNVERIFIED",
+    "oversized_bundle_map_reduce": "UNVERIFIED",
+    "deadline_and_urgency_matrix": "UNVERIFIED",
+    "kb_version_history_immutability": "UNVERIFIED",
+    "monthly_budget_80_warning_and_100_gate": "PARTIAL",
+    "provider_approval_boundary_tested_paths": "PASS",
+    "persisted_reconstruction_and_secret_exclusion": "PARTIAL",
+    "rerun_idempotency": "UNVERIFIED",
+    "formatter_boundary": "PASS",
+    "admin_test_mode_and_worker_independence": "PARTIAL",
+    "production_provider_approval": "BLOCKED",
+    "monthly_budget_business_value": "BLOCKED",
+    "deployment_alert_delivery": "BLOCKED",
+    "live_email_or_live_llm": "N/A"
+  },
+  "implementation_changes_made": 0,
+  "test_changes_made": 0,
+  "configuration_or_migration_changes_made": 0,
+  "only_verification_artifacts_created": [
+    "demo-evidence/prompt-14-reverification-report.md",
+    "demo-evidence/prompt-14-reverification-result.json",
+    "demo-evidence/prompt-14-reverification-results.txt"
+  ]
+}

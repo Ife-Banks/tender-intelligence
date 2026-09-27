@@ -179,3 +179,83 @@ class TestParseFailures:
         with pytest.raises(ParseFailedError) as raised:
             extract_pdf(secret.encode("utf-8"))
         assert secret not in str(raised.value)
+
+
+class TestDocumentMetadata:
+    """Prompt 12 §2 — the PDF's own ``/Info`` metadata is preserved alongside its content."""
+
+    def test_declared_metadata_is_preserved(self) -> None:
+        result = extract_pdf(
+            text_pdf(
+                [ENGLISH],
+                metadata={
+                    "title": "RFP - Health Systems Strengthening",
+                    "author": "Procurement Unit",
+                    "subject": "Ref. WH-AFR-2026-01",
+                    "producer": "Acme PDF Suite",
+                },
+            )
+        )
+        assert result.metadata["title"] == "RFP - Health Systems Strengthening"
+        assert result.metadata["author"] == "Procurement Unit"
+        assert result.metadata["subject"] == "Ref. WH-AFR-2026-01"
+        assert result.metadata["producer"] == "Acme PDF Suite"
+
+    def test_metadata_coexists_with_extracted_text(self) -> None:
+        # The metadata is additional: it never replaces or stands in for the content.
+        result = extract_pdf(text_pdf([ENGLISH], metadata={"title": "Tender TOR"}))
+        assert "World Health Organization" in result.text
+        assert result.metadata["title"] == "Tender TOR"
+
+    def test_a_document_without_metadata_reports_none_rather_than_inventing_one(self) -> None:
+        # An absent title is not an empty title; consumers must be able to tell the difference.
+        result = extract_pdf(text_pdf([ENGLISH]))
+        assert "title" not in result.metadata
+        assert "author" not in result.metadata
+
+    def test_blank_metadata_values_are_dropped(self) -> None:
+        result = extract_pdf(
+            text_pdf([ENGLISH], metadata={"title": "   ", "author": "Procurement"})
+        )
+        assert "title" not in result.metadata
+        assert result.metadata["author"] == "Procurement"
+
+    def test_metadata_survives_a_scanned_document(self) -> None:
+        # A scan has no text layer, so the declared metadata is the only identity the page has.
+        ocr = StubOcrEngine()
+        result = extract_pdf(
+            image_pdf("SCANNED ANNEX", 1, metadata={"title": "Scanned annex"}), ocr=ocr
+        )
+        assert result.metadata["title"] == "Scanned annex"
+
+
+class TestTableRoles:
+    """Prompt 12 §7 — the business role of an extracted table."""
+
+    def test_evaluation_matrix_is_classified_as_evaluation(self) -> None:
+        result = extract_pdf(table_pdf(EVALUATION_MATRIX, caption="Evaluation criteria"))
+        table = result.pages[0].tables[0]
+        assert table.role == "evaluation"
+        assert table.role_source == "vocabulary"
+
+    def test_deadline_table_is_classified_as_deadline(self) -> None:
+        result = extract_pdf(table_pdf(DEADLINE_TABLE))
+        assert result.pages[0].tables[0].role == "deadline"
+
+    def test_classification_does_not_disturb_the_matrix(self) -> None:
+        # The role is a hint; rows remain the source of truth and are untouched by it.
+        result = extract_pdf(table_pdf(EVALUATION_MATRIX))
+        assert result.pages[0].tables[0].rows == EVALUATION_MATRIX
+
+    def test_an_unclassifiable_table_is_reported_as_other(self) -> None:
+        result = extract_pdf(
+            table_pdf(
+                [
+                    ["Name", "Phone", "Email"],
+                    ["Procurement Unit", "+41 22 123 4567", "procurement@example.org"],
+                ]
+            )
+        )
+        table = result.pages[0].tables[0]
+        assert table.role == "other"
+        assert table.role_source == "none"

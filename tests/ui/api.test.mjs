@@ -65,12 +65,10 @@ test("recipient validation and last development recipient protection are enforce
   await assert.rejects(api.delete("/recipients/2"), (error) => error.code === "last_dev_recipient");
 });
 
-test("Viewer preview cannot mutate fixture configuration", async () => {
+test("offline fixtures expose operations without a simulated identity", async () => {
   const api = new AdminApi();
-  api.setRole("viewer");
-  await assert.rejects(api.put("/settings", { test_mode: false }), (error) => error instanceof ApiError && error.status === 403);
-  await assert.rejects(api.delete("/recipients/1"), (error) => error instanceof ApiError && error.status === 403);
-  assert.equal((await api.get("/settings")).test_mode, true);
+  await api.put("/settings", { test_mode: false, test_mode_reason: "fixture" });
+  assert.equal((await api.get("/settings")).test_mode, false);
 });
 
 test("secret fields are reduced to configured flags and never returned", async () => {

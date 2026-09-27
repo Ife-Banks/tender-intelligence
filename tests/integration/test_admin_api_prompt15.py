@@ -8,11 +8,9 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from support.pipeline import LISTING_EXTERNAL_IDS, build_harness
-from tender_intelligence.admin.auth import Actor
 from tender_intelligence.admin.main import app as unconfigured_app
 from tender_intelligence.admin.main import create_app
 from tender_intelligence.config.settings import get_env_settings
@@ -84,25 +82,27 @@ class _DryRunCoordinator:
 
 
 class _LLMClient:
+    def __init__(self, profile=None, api_key=""):
+        self.profile = profile
+        self.api_key = api_key
+
     def chat(self, messages, *, max_tokens=None):
         assert "KB" not in " ".join(message.content for message in messages)
-        assert max_tokens == 16
-        return LLMResponse("OK", "offline", "mock-model", LLMUsage(1, 1, None))
+        assert max_tokens == 64
+        assert messages[0].content == 'Return exactly this JSON: {"ok":true}'
+        assert self.profile.temperature == 0.0
+        assert self.profile.top_p == 0.95
+        assert self.profile.enable_thinking is False
+        assert self.profile.reasoning_budget is None
+        assert self.profile.supports_json is False
+        return LLMResponse('{"ok":true}', "offline", "mock-model", LLMUsage(1, 1, None))
 
 
 @pytest.fixture()
 def client(sqlite_engine, session_factory_gr, tmp_path):
-    def resolver(_request, authorization):
-        if authorization == "Bearer admin-test":
-            return Actor("admin@example.test", "admin")
-        if authorization == "Bearer viewer-test":
-            return Actor("viewer@example.test", "viewer")
-        raise HTTPException(401, detail={"code": "authentication_required"})
-
     app = create_app(
         engine=sqlite_engine,
         sessions=session_factory_gr,
-        actor_resolver=resolver,
         object_storage=LocalFileSystemStorage(tmp_path / "objects"),
         adapter_registry=_Registry(),
         run_coordinator=_DryRunCoordinator(),
@@ -111,51 +111,17 @@ def client(sqlite_engine, session_factory_gr, tmp_path):
         yield test_client
 
 
-def admin(client: TestClient):
-    return {"Authorization": "Bearer admin-test"}
-
-
-def viewer(client: TestClient):
-    return {"Authorization": "Bearer viewer-test"}
-
-
-def test_default_app_fails_closed_and_settings_read_does_not_write(client, session_factory_gr):
+def test_admin_api_works_without_login_and_settings_read_does_not_write(client, session_factory_gr):
     response = unconfigured_app
     with TestClient(response) as unconfigured:
-        assert unconfigured.get("/api/v1/settings").status_code == 401
+        assert unconfigured.get("/api/v1/sources/supported-types").status_code == 200
     with session_factory_gr() as session:
         before = session.query(Setting).count()
-    settings = client.get("/api/v1/settings", headers=viewer(client))
+    settings = client.get("/api/v1/settings")
     assert settings.status_code == 200
     assert settings.json()["test_mode"] is True
     with session_factory_gr() as session:
         assert session.query(Setting).count() == before
-
-
-def test_test_header_auth_is_local_opt_in_and_disabled_in_production(
-    sqlite_engine, session_factory_gr, monkeypatch
-):
-    monkeypatch.setenv("TI_ADMIN_ENABLE_TEST_AUTH", "true")
-    monkeypatch.setenv("TI_ENV", "development")
-    get_env_settings.cache_clear()
-    app = create_app(engine=sqlite_engine, sessions=session_factory_gr)
-    with TestClient(app) as test_client:
-        assert test_client.get("/api/v1/sources/supported-types").status_code == 401
-        allowed = test_client.get(
-            "/api/v1/sources/supported-types",
-            headers={"X-Test-Actor": "local-operator", "X-Test-Role": "admin"},
-        )
-        assert allowed.status_code == 200
-    monkeypatch.setenv("TI_ENV", "production")
-    get_env_settings.cache_clear()
-    app = create_app(engine=sqlite_engine, sessions=session_factory_gr)
-    with TestClient(app) as test_client:
-        denied = test_client.get(
-            "/api/v1/sources/supported-types",
-            headers={"X-Test-Actor": "local-operator", "X-Test-Role": "admin"},
-        )
-        assert denied.status_code == 401
-    get_env_settings.cache_clear()
 
 
 def test_env_alias_precedence_is_explicit(monkeypatch):
@@ -166,13 +132,6 @@ def test_env_alias_precedence_is_explicit(monkeypatch):
     get_env_settings.cache_clear()
 
 
-@pytest.mark.parametrize("actor", [Actor("", "admin"), Actor("name", "superuser")])
-def test_invalid_resolved_actor_is_rejected(client, actor):
-    client.app.state.actor_resolver = lambda *_args: actor
-    response = client.get("/api/v1/settings")
-    assert response.status_code == 401
-
-
 def test_source_crud_and_dry_run_have_no_pipeline_writes(client, session_factory_gr):
     payload = {
         "name": "synthetic",
@@ -180,11 +139,11 @@ def test_source_crud_and_dry_run_have_no_pipeline_writes(client, session_factory
         "base_url": "https://source.test",
         "listing_url": "https://source.test/list",
     }
-    created = client.post("/api/v1/sources", json=payload, headers=admin(client))
+    created = client.post("/api/v1/sources", json=payload)
     assert created.status_code == 201, created.text
     source_id = created.json()["id"]
     assert created.json()["auth_configured"] is False
-    dry_run = client.post(f"/api/v1/sources/{source_id}/test", headers=admin(client))
+    dry_run = client.post(f"/api/v1/sources/{source_id}/test")
     assert dry_run.status_code == 200, dry_run.text
     assert dry_run.json()["dry_run"] is True
     assert dry_run.json()["candidate_count"] == 1
@@ -195,6 +154,74 @@ def test_source_crud_and_dry_run_have_no_pipeline_writes(client, session_factory
         assert session.query(RunHistory).count() == 0
         assert session.get(Source, source_id).last_run_at is None
         assert session.query(ConfigChangeLog).count() == 1
+
+
+def test_manual_source_and_existing_tender_operations_are_test_mode_gated_and_audited(
+    client, session_factory_gr
+):
+    from types import SimpleNamespace
+
+    payload = {
+        "name": "manual-operation-source",
+        "source_type": "test_adapter",
+        "base_url": "https://source.test",
+        "listing_url": "https://source.test/list",
+    }
+    source_id = client.post("/api/v1/sources", json=payload).json()["id"]
+    with session_factory_gr() as session:
+        tender = Tender(
+            source_id=source_id,
+            external_id="fixture-1",
+            url="https://source.test/1",
+            title="Fictional fixture notice",
+            correlation_id=str(uuid.uuid4()),
+        )
+        session.add(tender)
+        session.commit()
+        tender_id = tender.id
+
+    calls = []
+
+    def fake_report(trigger):
+        return SimpleNamespace(
+            status=RunStatus.COMPLETED,
+            run_history_id=77,
+            stage_map=lambda: {"13-triage": "COMPLETED", "15-notification": "COMPLETED"},
+            error_code=None,
+            tenders_considered=1,
+            documents_acquired=0,
+            documents_processed=0,
+        )
+
+    def run_source(source, **kwargs):
+        calls.append(("source", source, kwargs.get("trigger")))
+        return fake_report("manual_source")
+
+    def run_existing_tender(tender, **kwargs):
+        calls.append(("tender", tender, "manual_tender"))
+        return fake_report("manual_tender")
+
+    client.app.state.run_coordinator.run_source = run_source
+    client.app.state.run_coordinator.run_existing_tender = run_existing_tender
+    source_response = client.post(f"/api/v1/sources/{source_id}/run")
+    tender_response = client.post(f"/api/v1/tenders/{tender_id}/process")
+    assert source_response.status_code == 202
+    assert tender_response.status_code == 202
+    source_op = client.get(f"/api/v1/operations/{source_response.json()['correlation_id']}")
+    tender_op = client.get(f"/api/v1/operations/{tender_response.json()['correlation_id']}")
+    assert source_op.json()["status"] == "COMPLETED"
+    assert source_op.json()["trigger"] == "manual_source"
+    assert tender_op.json()["status"] == "COMPLETED"
+    assert tender_op.json()["trigger"] == "manual_tender"
+    assert calls == [("source", source_id, "manual_source"), ("tender", tender_id, "manual_tender")]
+    with session_factory_gr() as session:
+        operations = session.query(ConfigChangeLog).filter_by(entity="ManualOperation").all()
+        assert len(operations) == 4  # queue and completion records for both operations
+        assert all("secret" not in str(row.changed_fields).lower() for row in operations)
+
+    client.put("/api/v1/settings", json={"test_mode": False, "test_mode_reason": "fixture"})
+    assert client.post(f"/api/v1/sources/{source_id}/run").status_code == 409
+    assert client.post(f"/api/v1/tenders/{tender_id}/process").status_code == 409
 
 
 def test_real_coordinator_source_dry_run_has_no_persisted_side_effects(
@@ -209,11 +236,6 @@ def test_real_coordinator_source_dry_run_has_no_persisted_side_effects(
         pytest.fail(f"coordinator raised {type(exc).__name__}")
     assert direct_report.status is RunStatus.DRY_RUN
 
-    def resolver(_request, authorization):
-        if authorization == "Bearer admin-test":
-            return Actor("admin@example.test", "admin")
-        raise HTTPException(401, detail={"code": "authentication_required"})
-
     class NotificationSpy:
         def __init__(self):
             self.calls = 0
@@ -227,14 +249,13 @@ def test_real_coordinator_source_dry_run_has_no_persisted_side_effects(
     app = create_app(
         engine=sqlite_engine,
         sessions=session_factory_gr,
-        actor_resolver=resolver,
         run_coordinator=harness.coordinator,
         notification_service=notification_spy,
     )
     before = _pipeline_counts(session_factory_gr)
     with TestClient(app) as test_client:
         response = test_client.post(
-            f"/api/v1/sources/{source_id}/test", headers={"Authorization": "Bearer admin-test"}
+            f"/api/v1/sources/{source_id}/test"
         )
     after = _pipeline_counts(session_factory_gr)
     assert response.status_code == 200, response.text
@@ -258,16 +279,11 @@ def _pipeline_counts(session_factory):
         }
 
 
-def test_viewer_cannot_write_and_admin_test_mode_off_is_audited(client, session_factory_gr):
-    denied = client.put(
-        "/api/v1/settings",
-        headers=viewer(client),
-        json={"test_mode": False, "test_mode_reason": "test"},
-    )
-    assert denied.status_code == 403
+def test_settings_write_is_available_without_login_and_test_mode_off_is_audited(
+    client, session_factory_gr
+):
     changed = client.put(
         "/api/v1/settings",
-        headers=admin(client),
         json={"test_mode": False, "test_mode_reason": "operator test"},
     )
     assert changed.status_code == 200, changed.text
@@ -275,20 +291,20 @@ def test_viewer_cannot_write_and_admin_test_mode_off_is_audited(client, session_
     with session_factory_gr() as session:
         row = session.get(Setting, 1)
         assert row.test_mode is False
-        assert row.test_mode_enabled_by == "admin@example.test"
+        assert row.test_mode_enabled_by == "internal-admin-api"
         audit = session.query(ConfigChangeLog).one()
-        assert audit.actor == "admin@example.test"
+        assert audit.actor == "internal-admin-api"
         assert audit.changed_fields["test_mode"] is False
 
 
 def test_settings_reject_unknown_and_nested_secret_fields(client, session_factory_gr):
-    baseline = client.get("/api/v1/settings", headers=admin(client)).json()
+    baseline = client.get("/api/v1/settings").json()
     for payload in (
         {"provider_secret": "TEST_SECRET_DO_NOT_LEAK_938271"},
         {"triage_rules": {"provider_secret": "TEST_SECRET_DO_NOT_LEAK_938271"}},
         {"alert_thresholds": {"provider_secret": "TEST_SECRET_DO_NOT_LEAK_938271"}},
     ):
-        response = client.put("/api/v1/settings", headers=admin(client), json=payload)
+        response = client.put("/api/v1/settings", json=payload)
         assert response.status_code == 422
         assert "TEST_SECRET_DO_NOT_LEAK_938271" not in response.text
     with session_factory_gr() as session:
@@ -296,8 +312,26 @@ def test_settings_reject_unknown_and_nested_secret_fields(client, session_factor
         assert "TEST_SECRET_DO_NOT_LEAK_938271" not in str(session.query(ConfigChangeLog).all())
 
 
-def test_viewer_cannot_call_privileged_endpoints(client):
-    viewer_only_requests = [
+def test_no_login_required_for_internal_endpoints(client):
+    for path in (
+        "/api/v1/sources/supported-types",
+        "/api/v1/sources",
+        "/api/v1/tenders",
+        "/api/v1/settings",
+        "/api/v1/triage",
+        "/api/v1/llm/profiles",
+        "/api/v1/llm/roles",
+        "/api/v1/llm/usage",
+        "/api/v1/recipients",
+        "/api/v1/mail/providers",
+        "/api/v1/knowledge-base/versions",
+        "/api/v1/audit",
+        "/api/v1/health/dashboard",
+    ):
+        response = client.get(path)
+        assert response.status_code == 200, (path, response.text)
+
+    requests = [
         (
             "post",
             "/api/v1/sources",
@@ -325,14 +359,14 @@ def test_viewer_cannot_call_privileged_endpoints(client):
         ("post", "/api/v1/mail/test", {"recipient_id": 1}),
         ("get", "/api/v1/audit", None),
     ]
-    for method, path, payload in viewer_only_requests:
+    for method, path, payload in requests:
         call = getattr(client, method)
         response = (
-            call(path, headers=viewer(client))
+            call(path)
             if payload is None
-            else call(path, headers=viewer(client), json=payload)
+            else call(path, json=payload)
         )
-        assert response.status_code == 403, (method, path, response.text)
+        assert response.status_code not in (401, 403), (method, path, response.text)
 
 
 def test_profile_secrets_write_only_and_validation_errors_redacted(
@@ -348,20 +382,19 @@ def test_profile_secrets_write_only_and_validation_errors_redacted(
         "api_key": secret,
         "approved_for_company_docs": False,
     }
-    response = client.post("/api/v1/llm/profiles", headers=admin(client), json=payload)
+    response = client.post("/api/v1/llm/profiles", json=payload)
     assert response.status_code == 201, response.text
     assert secret not in response.text
     profile_id = response.json()["id"]
     assert response.json()["api_key_configured"] is True
     assert "api_key_encrypted" not in response.json()
-    detail = client.get(f"/api/v1/llm/profiles/{profile_id}", headers=admin(client))
+    detail = client.get(f"/api/v1/llm/profiles/{profile_id}")
     assert secret not in detail.text
-    viewer_detail = client.get(f"/api/v1/llm/profiles/{profile_id}", headers=viewer(client))
-    assert viewer_detail.status_code == 200
-    assert "base_url" not in viewer_detail.json()
+    unauthenticated_detail = client.get(f"/api/v1/llm/profiles/{profile_id}")
+    assert unauthenticated_detail.status_code == 200
+    assert unauthenticated_detail.json() == detail.json()
     invalid = client.post(
         "/api/v1/llm/profiles",
-        headers=admin(client),
         json={**payload, "name": "invalid", "context_window_tokens": 0},
     )
     assert invalid.status_code == 422
@@ -381,8 +414,7 @@ def test_profile_approval_toggle_is_shared_persisted_and_audited(client, session
     for approved in (True, False):
         response = client.put(
             f"/api/v1/llm/profiles/{profile_id}",
-            headers=admin(client),
-            json={
+                json={
                 "name": "approval-profile",
                 "base_url": "https://llm.test/v1",
                 "model": "test",
@@ -396,15 +428,14 @@ def test_profile_approval_toggle_is_shared_persisted_and_audited(client, session
     assert (
         client.put(
             f"/api/v1/llm/profiles/{profile_id}",
-            headers=viewer(client),
             json={"name": "approval-profile", "base_url": "https://llm.test/v1", "model": "test"},
         ).status_code
-        == 403
+        == 200
     )
     with session_factory_gr() as session:
         records = session.query(ConfigChangeLog).filter_by(entity="LLMProfile").all()
-        assert len(records) == 2
-        assert all(row.actor == "admin@example.test" for row in records)
+        assert len(records) == 3
+        assert all(row.actor == "internal-admin-api" for row in records)
 
 
 def test_llm_connection_uses_mock_and_records_actual_invocation(
@@ -420,14 +451,98 @@ def test_llm_connection_uses_mock_and_records_actual_invocation(
         session.commit()
         profile_id = profile.id
     # create_app has no implicit network client; test harness explicitly injects the fake.
-    client.app.state.llm_client_factory = lambda **_kwargs: _LLMClient()
-    result = client.post(f"/api/v1/llm/profiles/{profile_id}/test", headers=admin(client))
+    client.app.state.llm_client_factory = lambda **kwargs: _LLMClient(**kwargs)
+    result = client.post(f"/api/v1/llm/profiles/{profile_id}/test")
     assert result.status_code == 200, result.text
+    assert result.json()["request_config"] == {
+        "temperature": 0.0,
+        "top_p": 0.95,
+        "max_tokens": 64,
+        "enable_thinking": False,
+        "reasoning_budget": 0,
+        "stream": False,
+        "response_format": None,
+    }
     assert "api_key" not in result.text and "authorization" not in result.text.lower()
     with session_factory_gr() as session:
         call = session.query(LLMCall).one()
         assert call.role == "admin_test" and call.status == "success"
         assert call.tokens_in == 1 and call.est_cost is None
+        saved_profile = session.get(LLMProfile, profile_id)
+        assert saved_profile.temperature is None
+        assert saved_profile.top_p is None
+        assert saved_profile.enable_thinking is False
+
+
+def test_connection_probe_uses_fixed_token_budget(client, session_factory_gr, monkeypatch):
+    """Test connection uses a fixed 64-token budget for all providers."""
+    monkeypatch.setenv("TI_MASTER_KEY", base64.b64encode(b"g" * 32).decode())
+    get_env_settings.cache_clear()
+    profile = LLMProfile(
+        name="Test Provider fixture",
+        base_url="https://api.test-provider.example/v1",
+        model="test-model-v1",
+        timeout_seconds=180,
+        active=True,
+    )
+    with session_factory_gr() as session:
+        session.add(profile)
+        session.commit()
+        profile_id = profile.id
+
+    def factory(**_kwargs):
+        def chat(_messages, *, max_tokens=None):
+            assert max_tokens == 64
+            return LLMResponse(
+                '{"ok":true}', "Test Provider", "test-model-v1", LLMUsage(8, 4, None)
+            )
+
+        return SimpleNamespace(chat=chat)
+
+    client.app.state.llm_client_factory = factory
+    response = client.post(f"/api/v1/llm/profiles/{profile_id}/test")
+    assert response.status_code == 200, response.text
+    assert response.json()["request_config"]["max_tokens"] == 64
+
+
+def test_llm_connection_timeout_returns_safe_phase_diagnostic(client, session_factory_gr):
+    from tender_intelligence.interfaces.llm import LLMError
+
+    profile = LLMProfile(
+        name="timeout-profile",
+        base_url="https://user:private@provider.test/v1?token=never-log",
+        model="synthetic-model",
+        timeout_seconds=60,
+    )
+    with session_factory_gr() as session:
+        session.add(profile)
+        session.commit()
+        profile_id = profile.id
+
+    def timeout_factory(**_kwargs):
+        error = LLMError(
+            "private detail must not be exposed",
+            "timeout_before_http_response",
+            diagnostic_phase="after_connection_before_response_headers",
+        )
+        error.__cause__ = TimeoutError("private transport detail")
+        raise error
+
+    client.app.state.llm_client_factory = timeout_factory
+    response = client.post(f"/api/v1/llm/profiles/{profile_id}/test")
+    assert response.status_code == 502
+    result = response.json()["error"]["diagnostic"]
+    assert result["category"] == "timeout_before_http_response"
+    assert result["phase"] == "after_connection_before_response_headers"
+    assert result["exception_class"] == "TimeoutError"
+    assert result["http_status"] is None
+    assert result["timeout_seconds"] == 60
+    assert result["request_url"] == "https://provider.test/v1/chat/completions"
+    assert "private" not in response.text
+    with session_factory_gr() as session:
+        call = session.query(LLMCall).one()
+        assert call.status == "failed"
+        assert call.error_code == "timeout_before_http_response"
 
 
 def test_llm_connection_factory_absent_fails_truthfully_without_llmcall(client, session_factory_gr):
@@ -436,18 +551,17 @@ def test_llm_connection_factory_absent_fails_truthfully_without_llmcall(client, 
         session.add(profile)
         session.commit()
         profile_id = profile.id
-    response = client.post(f"/api/v1/llm/profiles/{profile_id}/test", headers=admin(client))
+    response = client.post(f"/api/v1/llm/profiles/{profile_id}/test")
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "llm_test_unavailable"
     with session_factory_gr() as session:
         assert session.query(LLMCall).count() == 0
 
 
-def test_kb_viewer_restriction_and_recipient_last_active_guard(client, session_factory_gr):
+def test_kb_available_without_login_and_recipient_last_active_guard(client, session_factory_gr):
     content = b"Synthetic KB section."
     upload = client.post(
         "/api/v1/knowledge-base/versions",
-        headers=admin(client),
         json={
             "filename": "capabilities.md",
             "content_base64": base64.b64encode(content).decode(),
@@ -456,38 +570,35 @@ def test_kb_viewer_restriction_and_recipient_last_active_guard(client, session_f
     )
     assert upload.status_code == 201, upload.text
     version_id = upload.json()["id"]
-    assert client.get("/api/v1/knowledge-base/versions", headers=viewer(client)).status_code == 403
+    assert client.get("/api/v1/knowledge-base/versions").status_code == 200
     assert (
         client.get(
-            f"/api/v1/knowledge-base/versions/{version_id}", headers=viewer(client)
+            f"/api/v1/knowledge-base/versions/{version_id}"
         ).status_code
-        == 403
+        == 200
     )
     assert (
-        client.get(f"/api/v1/knowledge-base/versions/{version_id}", headers=admin(client)).json()[
+        client.get(f"/api/v1/knowledge-base/versions/{version_id}").json()[
             "content"
         ]
         == content.decode()
     )
     first = client.post(
         "/api/v1/recipients",
-        headers=admin(client),
         json={"email": "dev1@example.test", "list_type": "dev_alert"},
     )
     assert first.status_code == 201
-    last_delete = client.delete(f"/api/v1/recipients/{first.json()['id']}", headers=admin(client))
+    last_delete = client.delete(f"/api/v1/recipients/{first.json()['id']}")
     assert last_delete.status_code == 409
     assert (
         client.post(
             "/api/v1/recipients",
-            headers=viewer(client),
             json={"email": "dev2@example.test", "list_type": "dev_alert"},
         ).status_code
-        == 403
+        == 201
     )
     invalid_email = client.post(
         "/api/v1/recipients",
-        headers=admin(client),
         json={"email": "not an email", "list_type": "tender"},
     )
     assert invalid_email.status_code == 422
@@ -501,7 +612,6 @@ def test_adversarial_secret_redaction_across_config_audit_and_errors(
     secret = "TEST_SECRET_DO_NOT_LEAK_938271"
     source = client.post(
         "/api/v1/sources",
-        headers=admin(client),
         json={
             "name": "secret-source",
             "source_type": "test_adapter",
@@ -513,7 +623,6 @@ def test_adversarial_secret_redaction_across_config_audit_and_errors(
     assert secret not in source.text
     provider = client.post(
         "/api/v1/mail/providers",
-        headers=admin(client),
         json={
             "name": "secret-mail",
             "provider_type": "sendlib",
@@ -524,9 +633,9 @@ def test_adversarial_secret_redaction_across_config_audit_and_errors(
     assert provider.status_code == 201, provider.text
     assert secret not in provider.text
     responses = [
-        client.get("/api/v1/sources", headers=admin(client)),
-        client.get("/api/v1/mail/providers", headers=admin(client)),
-        client.get("/api/v1/audit", headers=admin(client)),
+        client.get("/api/v1/sources"),
+        client.get("/api/v1/mail/providers"),
+        client.get("/api/v1/audit"),
         client.get("/health"),
     ]
     assert all(secret not in response.text for response in responses)
@@ -543,7 +652,6 @@ def test_adversarial_secret_redaction_across_config_audit_and_errors(
 def test_test_email_is_dev_only_test_mode_gated_and_audited(client, session_factory_gr):
     recipient = client.post(
         "/api/v1/recipients",
-        headers=admin(client),
         json={"email": "devmail@example.test", "list_type": "dev_alert"},
     )
     recipient_id = recipient.json()["id"]
@@ -563,16 +671,15 @@ def test_test_email_is_dev_only_test_mode_gated_and_audited(client, session_fact
     client.app.state.notification_service = FakeNotificationService()
     client.put(
         "/api/v1/settings",
-        headers=admin(client),
         json={"test_mode": False, "test_mode_reason": "exercise test-mail guard"},
     )
     denied = client.post(
-        "/api/v1/mail/test", headers=admin(client), json={"recipient_id": recipient_id}
+        "/api/v1/mail/test", json={"recipient_id": recipient_id}
     )
     assert denied.status_code == 409
-    client.put("/api/v1/settings", headers=admin(client), json={"test_mode": True})
+    client.put("/api/v1/settings", json={"test_mode": True})
     sent = client.post(
-        "/api/v1/mail/test", headers=admin(client), json={"recipient_id": recipient_id}
+        "/api/v1/mail/test", json={"recipient_id": recipient_id}
     )
     assert sent.status_code == 200, sent.text
     assert sent.json()["status"] == "sent"
@@ -584,7 +691,6 @@ def test_test_email_is_dev_only_test_mode_gated_and_audited(client, session_fact
 def test_failed_test_email_is_audited_and_returns_safe_gateway_error(client, session_factory_gr):
     recipient = client.post(
         "/api/v1/recipients",
-        headers=admin(client),
         json={"email": "devfail@example.test", "list_type": "dev_alert"},
     )
 
@@ -603,7 +709,7 @@ def test_failed_test_email_is_audited_and_returns_safe_gateway_error(client, ses
 
     client.app.state.notification_service = FailedNotificationService()
     response = client.post(
-        "/api/v1/mail/test", headers=admin(client), json={"recipient_id": recipient.json()["id"]}
+        "/api/v1/mail/test", json={"recipient_id": recipient.json()["id"]}
     )
     assert response.status_code == 502
     assert response.json()["detail"]["code"] == "test_email_failed"
@@ -635,7 +741,7 @@ def test_timeline_reads_existing_persisted_correlation_events(client, session_fa
         session.commit()
         tender_id = tender.id
         correlation_id = tender.correlation_id
-    response = client.get(f"/api/v1/tenders/{tender_id}/timeline", headers=viewer(client))
+    response = client.get(f"/api/v1/tenders/{tender_id}/timeline")
     assert response.status_code == 200
     assert response.json()["correlation_id"] == correlation_id
     assert [event["stage"] for event in response.json()["events"]] == ["discovery"]
@@ -665,14 +771,14 @@ def test_health_dashboard_excludes_admin_test_email_failures(client, session_fac
         )
         session.commit()
 
-    response = client.get("/api/v1/health/dashboard", headers=viewer(client))
+    response = client.get("/api/v1/health/dashboard")
 
     assert response.status_code == 200, response.text
     assert response.json()["notification_failures"]["7d"] == 1
     assert response.json()["stuck_notification_count"] == 0
 
 
-def test_admin_ui_assets_are_served_while_api_remains_fail_closed(client):
+def test_admin_ui_and_api_assets_are_served_without_login(client):
     page = client.get("/admin/")
     assert page.status_code == 200
     assert "Tender Intelligence" in page.text
@@ -682,5 +788,4 @@ def test_admin_ui_assets_are_served_while_api_remains_fail_closed(client):
     assert client.get("/admin/app.mjs").status_code == 200
     assert client.get("/admin/api.mjs").status_code == 200
     assert client.get("/admin/styles.css").status_code == 200
-    protected = client.get("/api/v1/settings")
-    assert protected.status_code == 401
+    assert client.get("/api/v1/settings").status_code == 200

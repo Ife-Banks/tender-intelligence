@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Index, Integer, String, Text
+from typing import Any
+
+from sqlalchemy import JSON, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tender_intelligence.db.base import Base, TimestampMixin
@@ -23,6 +25,7 @@ class KnowledgeBaseVersion(Base, TimestampMixin):
     token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<KnowledgeBaseVersion id={self.id} tokens={self.token_count}>"

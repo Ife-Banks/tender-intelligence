@@ -54,6 +54,7 @@ class StageNumber(StrEnum):
     PROCESSING = "09-processing"
     TRIAGE = "13-triage"
     VERDICT = "14-verdict"
+    NOTIFICATION = "15-notification"
 
 
 #: Execution order, derived from the enum's declaration order (prompt 10 §6).

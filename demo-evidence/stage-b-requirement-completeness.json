@@ -1,0 +1,142 @@
+{
+  "report": "stage-b-requirement-completeness",
+  "date": "2026-09-24",
+  "gate": "STAGE B REQUIREMENT COMPLETENESS: IMPLEMENTED — READY FOR INDEPENDENT VERIFICATION",
+  "finding_addressed": "Current validation can compare model-supplied requirements with model-supplied assessments without independently establishing that the requirement set is complete.",
+  "mechanism": {
+    "name": "Two-pass independent extraction",
+    "description": "Pass 1 extracts material requirements from the tender document bundle using a separate LLM call with no KB or company data. The output is the independently established requirement set. Pass 2 assesses the company against exactly that set. The validator enforces strict set equality between extracted and assessed requirements.",
+    "pass_1": {
+      "input": "tender document bundle (source text only)",
+      "output": "RequirementExtraction { requirements: [MaterialRequirement] }",
+      "validator": "_validate_requirement_sources — verifies each requirement cites real document text"
+    },
+    "pass_2": {
+      "input": "tender documents + company KB + material_requirements from Pass 1",
+      "output": "VerdictPayload { assessments: [RequirementAssessment], ... }",
+      "validator": "_validate_semantics — enforces all completeness rules"
+    }
+  },
+  "models": {
+    "MaterialRequirement": {
+      "fields": ["requirement: StrictStr", "tender_evidence: list[VerdictDocument] (min_length=1)"],
+      "location": "src/tender_intelligence/verdict/service.py"
+    },
+    "RequirementExtraction": {
+      "fields": ["requirements: list[MaterialRequirement] (min_length=1)"],
+      "location": "src/tender_intelligence/verdict/service.py"
+    },
+    "RequirementAssessment": {
+      "fields": ["requirement", "tender_evidence", "company_evidence", "status", "assessment", "gap"],
+      "location": "src/tender_intelligence/verdict/service.py"
+    },
+    "VerdictPayload": {
+      "fields": ["schema_version", "requirements", "assessments", "verdict", "confidence", "incomplete_inputs", "limitations", "deadline_*"],
+      "location": "src/tender_intelligence/verdict/service.py"
+    }
+  },
+  "completeness_rules": [
+    {
+      "id": "R1",
+      "description": "Model requirements list must exactly match independent extraction (set equality, no duplicates)",
+      "enforced_by": "_validate_semantics",
+      "error": "model requirements do not match independent extraction"
+    },
+    {
+      "id": "R2",
+      "description": "Assessments must exactly cover independent extraction (set equality, no missing, no orphans)",
+      "enforced_by": "_validate_semantics",
+      "error": "assessments do not exactly cover independent requirements"
+    },
+    {
+      "id": "R3",
+      "description": "Each assessment must include the source evidence established in Pass 1",
+      "enforced_by": "_validate_semantics",
+      "error": "assessment omitted independently established source evidence"
+    },
+    {
+      "id": "R4",
+      "description": "incomplete_inputs payload flag must match bundle flag",
+      "enforced_by": "_validate_semantics",
+      "error": "incomplete input state mismatch"
+    },
+    {
+      "id": "R5",
+      "description": "Unverified assessments with no company evidence must say 'no evidence on file'",
+      "enforced_by": "_validate_semantics",
+      "error": "unsupported capability assessment must say no evidence on file"
+    },
+    {
+      "id": "R6",
+      "description": "Verdict must be derived deterministically from assessment statuses and gaps",
+      "enforced_by": "_validate_semantics",
+      "error": "verdict does not follow requirement assessments and gaps"
+    },
+    {
+      "id": "R7",
+      "description": "Each requirement's tender_evidence must cite real document text at a real location",
+      "enforced_by": "_validate_requirement_sources",
+      "error": "requirement source evidence is invalid"
+    },
+    {
+      "id": "R8",
+      "description": "Requirement text must be non-empty and non-duplicate (case-insensitive)",
+      "enforced_by": "_validate_requirement_sources",
+      "error": "empty or duplicate independently extracted requirement"
+    }
+  ],
+  "test_results": {
+    "new_unit_tests": {
+      "file": "tests/unit/test_stage_b_completeness.py",
+      "count": 12,
+      "result": "PASS"
+    },
+    "existing_integration_tests": {
+      "file": "tests/integration/test_verdict_engine.py",
+      "relevant_tests": [
+        "test_independently_extracted_requirements_all_assessed",
+        "test_incomplete_or_orphaned_requirement_assessments_are_rejected[missing_assessment]",
+        "test_incomplete_or_orphaned_requirement_assessments_are_rejected[orphan_assessment]",
+        "test_incomplete_or_orphaned_requirement_assessments_are_rejected[model_omission]",
+        "test_incomplete_bundle_flag_is_forwarded_and_persisted"
+      ],
+      "result": "PASS"
+    }
+  },
+  "test_matrix": [
+    {"id": "T1", "name": "test_complete_requirement_set_passes_validation", "rule": "Complete set passes", "result": "PASS"},
+    {"id": "T2", "name": "test_missing_assessment_is_rejected", "rule": "Missing assessment rejected", "result": "PASS"},
+    {"id": "T3", "name": "test_orphan_assessment_is_rejected", "rule": "Orphan assessment rejected", "result": "PASS"},
+    {"id": "T4", "name": "test_model_omission_of_established_requirement_is_rejected", "rule": "Model omission rejected", "result": "PASS"},
+    {"id": "T5", "name": "test_incomplete_inputs_flag_is_propagated_to_payload", "rule": "incomplete_inputs flag enforced", "result": "PASS"},
+    {"id": "T6", "name": "test_evidence_backed_requirement_assessment_must_include_source_evidence", "rule": "Provenance coverage enforced", "result": "PASS"},
+    {"id": "T7", "name": "test_no_kb_evidence_says_no_evidence_on_file_not_absence_claim", "rule": "No-evidence phrase required", "result": "PASS"},
+    {"id": "T8", "name": "test_unverified_requirements_produce_apply_with_conditions_verdict", "rule": "Verdict derived from assessments", "result": "PASS"}
+  ],
+  "controls_preserved": {
+    "stage_a_gate": true,
+    "provider_approval": true,
+    "budget_gate": true,
+    "validation_retry_exactly_once": true,
+    "transport_retry_with_fallback": true,
+    "test_mode_idempotency": true,
+    "provenance_document_id_location_quote": true,
+    "verdict_enum_unchanged": true,
+    "deadline_fields_unchanged": true,
+    "incomplete_inputs_semantics": true,
+    "confidence_field": true
+  },
+  "files_changed": [
+    {
+      "file": "tests/unit/test_stage_b_completeness.py",
+      "status": "new",
+      "description": "Unit test matrix for completeness rules at the validator function boundary"
+    }
+  ],
+  "files_unchanged": [
+    {
+      "file": "src/tender_intelligence/verdict/service.py",
+      "note": "All completeness logic pre-existing; no modifications required"
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "gate": "BLOCKED — NO NEW/UPDATED TENDER",
+  "evidence_recorded_at": "2026-09-26T18:26:12Z",
+  "source": {
+    "id": 2,
+    "name": "WAHO Live Demo",
+    "active": true
+  },
+  "dry_run": {
+    "correlation_id": "202939c6-6c34-4b79-b8ab-a5975223864b",
+    "status": "DRY_RUN",
+    "discovery_stage": "COMPLETED",
+    "dedup_stage": "COMPLETED",
+    "candidate_count": 10,
+    "planned_actions": [
+      "no new or changed tenders; nothing further to do"
+    ],
+    "persisted": false,
+    "email_sent": false
+  },
+  "approval_recheck_dry_run": {
+    "correlation_id": "f4d115fd-4ec1-43c6-a90f-73879eca4657",
+    "status": "DRY_RUN",
+    "discovery_stage": "COMPLETED",
+    "dedup_stage": "COMPLETED",
+    "candidate_count": 10,
+    "planned_actions": [
+      "no new or changed tenders; nothing further to do"
+    ],
+    "persisted": false,
+    "email_sent": false
+  },
+  "eligible_tender": null,
+  "existing_database_snapshot": {
+    "source_tender_count": 10,
+    "verdicts_present_for_listed_tenders": false,
+    "tender_or_dedup_state_modified": false
+  },
+  "llm": {
+    "triage_role": {
+      "profile": "Token Harbor - DeepSeek V4 Flash Free",
+      "model": "deepseek-v4-flash:free",
+      "active": true,
+      "api_key_configured": true,
+      "approved_for_company_docs": true
+    },
+    "verdict_role": {
+      "profile": "Token Harbor - DeepSeek V4 Flash Free",
+      "model": "deepseek-v4-flash:free",
+      "active": true,
+      "api_key_configured": true,
+      "approved_for_company_docs": true
+    },
+    "nvidia_selected": false
+  },
+  "email_safety": {
+    "test_mode": true,
+    "active_dev_alert_recipient_configured": true,
+    "recipient_address_recorded": false,
+    "sendlib_active": true,
+    "sendlib_credentials_configured": true,
+    "sendlib_breaker_state": "closed",
+    "email_attempted": false,
+    "email_received": false
+  },
+  "stages": {
+    "detail": "NOT_RUN_NO_ELIGIBLE_TENDER",
+    "attachment_discovery_and_acquisition": "NOT_RUN_NO_ELIGIBLE_TENDER",
+    "document_processing": "NOT_RUN_NO_ELIGIBLE_TENDER",
+    "stage_a": "NOT_RUN_NO_ELIGIBLE_TENDER",
+    "stage_b": "NOT_RUN_NO_ELIGIBLE_TENDER",
+    "verdict_persisted": false,
+    "notification_dispatch": "NOT_RUN_NO_ELIGIBLE_TENDER",
+    "sendlib_delivery": "NOT_RUN_NO_ELIGIBLE_TENDER",
+    "actual_email_receipt": "NOT_OBSERVED",
+    "second_dedup_run": "NOT_RUN"
+  },
+  "notes": [
+    "Admin source test was used only as a read-only dry-run.",
+    "No production tender, fingerprint, or deduplication state was changed.",
+    "Repository offline fixtures are test harnesses, not a supported worker demo mechanism.",
+    "DeepSeek company-document approval was initially false and was later re-checked as true."
+  ]
+}

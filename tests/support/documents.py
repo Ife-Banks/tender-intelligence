@@ -72,9 +72,15 @@ ELIGIBILITY_TABLE = [
 ]
 
 
-def text_pdf(pages: list[str]) -> bytes:
-    """A PDF with a genuine native text layer, one entry of *pages* per page."""
+def text_pdf(pages: list[str], *, metadata: dict[str, str] | None = None) -> bytes:
+    """A PDF with a genuine native text layer, one entry of *pages* per page.
+
+    *metadata* is written to the document's ``/Info`` dictionary, which is where a real producer
+    puts the title, author and reference a tender announces (prompt 12 §2).
+    """
     document = pymupdf.open()
+    if metadata:
+        document.set_metadata({str(key): str(value) for key, value in metadata.items()})
     for text in pages:
         page = document.new_page()
         page.insert_textbox(pymupdf.Rect(56, 56, 540, 780), text, fontsize=11, fontname="helv")
@@ -93,12 +99,15 @@ def blank_pdf(page_count: int = 1) -> bytes:
     return data
 
 
-def image_pdf(text: str = "SCANNED ANNEX", page_count: int = 1) -> bytes:
+def image_pdf(
+    text: str = "SCANNED ANNEX", page_count: int = 1, *, metadata: dict[str, str] | None = None
+) -> bytes:
     """An image-only PDF: what a scanned annex looks like to a text extractor.
 
     This is exactly the docs/06 §6.2 "scanned PDF (image) → OCR" input. ``text`` is drawn onto the
     raster so the fixture is a believable scan, but the page carries no text layer, so extraction
-    can only succeed through OCR.
+    can only succeed through OCR. ``metadata`` still goes into ``/Info``, which is the realistic
+    case: a scanner or a document-management system stamps the paper before it is imaged.
     """
     image = Image.new("RGB", (1240, 1754), "white")
     draw = ImageDraw.Draw(image)
@@ -108,6 +117,8 @@ def image_pdf(text: str = "SCANNED ANNEX", page_count: int = 1) -> bytes:
     buffer.seek(0)
 
     document = pymupdf.open()
+    if metadata:
+        document.set_metadata({str(key): str(value) for key, value in metadata.items()})
     for _ in range(page_count):
         page = document.new_page()
         page.insert_image(pymupdf.Rect(0, 0, 595, 842), stream=buffer.getvalue())
@@ -227,12 +238,32 @@ def table_pdf(
     return data
 
 
-def docx_bytes(blocks: list[str | list[list[str]]]) -> bytes:
-    """A DOCX whose *blocks* are paragraphs (``str``) or tables (list of rows), in that order."""
+def docx_bytes(
+    blocks: list[str | list[list[str]] | tuple[str, int, str]],
+    *,
+    properties: dict[str, str] | None = None,
+) -> bytes:
+    """A DOCX whose *blocks* are paragraphs, tables, or headings, in that order.
+
+    A ``(style, level, text)`` tuple becomes a paragraph carrying that built-in style, so the
+    fixture reproduces the document's own heading structure rather than simulating it (prompt 12
+    §4). A ``("style", level, text)`` triple with a non-numeric style name is not produced here;
+    ``add_heading`` is the only way to write real Word heading styles.
+
+    *properties* populates the package's core properties — the document metadata a DOCX carries
+    outside its body.
+    """
     document = docx.Document()
+    if properties:
+        for key, value in properties.items():
+            setattr(document.core_properties, key, value)
     for block in blocks:
         if isinstance(block, str):
             document.add_paragraph(block)
+            continue
+        if isinstance(block, tuple):
+            _style, level, text = block
+            document.add_heading(text, level=level)
             continue
         table = document.add_table(rows=len(block), cols=len(block[0]))
         for row_index, row in enumerate(block):

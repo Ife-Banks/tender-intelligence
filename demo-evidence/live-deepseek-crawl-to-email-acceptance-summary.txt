@@ -1,0 +1,8 @@
+CONTROLLED LIVE DEEPSEEK TENDER-TO-EMAIL ACCEPTANCE
+Gate: BLOCKED — NO NEW/UPDATED TENDER
+Recorded: 2026-09-26 18:26 UTC
+Source: WAHO Live Demo (ID 2)
+Dry-run: 10 candidates; discovery and dedup completed; no new or changed tender.
+No worker run, persistence change, Stage A/B call, notification, or email was made.
+Re-check dry-run: 10 candidates; no new or changed tender; nothing persisted.
+Test Mode: ON. Sendlib: active. DeepSeek V4 Flash assigned to both roles and approved for company documents.

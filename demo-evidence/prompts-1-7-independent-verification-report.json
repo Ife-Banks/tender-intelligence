@@ -1,0 +1,258 @@
+{
+  "status": "REMEDIATION_REQUIRED",
+  "date": "2026-09-24",
+  "repository_head": "16b6543 (HEAD -> main, origin/main) admin api and ui configured",
+  "verification_role": "independent_verification_engineer_read_only",
+  "product_code_modified": false,
+  "prompts": {
+    "1": {
+      "name": "Source Adapter Architecture & Pluggability",
+      "gate": "PASS",
+      "requirements": {
+        "P1-01_adapter_interface": "PASS",
+        "P1-02_source_registry": "PASS",
+        "P1-03_no_source_name_branching": "PASS",
+        "P1-04_config_only_extensibility": "PASS",
+        "P1-05_waho_preservation": "PASS"
+      },
+      "key_findings": [
+        "SourceAdapter ABC with list_new_tenders/get_detail/get_attachments confirmed in interfaces/source.py",
+        "AdapterRegistry maps source_type to factory; no source-name branching found",
+        "test_source_extensibility.py integration test proves config-only same-type extensibility"
+      ]
+    },
+    "2": {
+      "name": "Source Type Strategies",
+      "gate": "PASS",
+      "requirements": {
+        "P2-01_paginated_html": "PASS",
+        "P2-02_filtered_html": "PASS",
+        "P2-03_search_form": "PASS",
+        "P2-04_rss_atom": "PASS",
+        "P2-05_json_api": "PASS",
+        "P2-06_normalized_contract": "PASS",
+        "P2-07_politeness": "PASS"
+      },
+      "key_findings": [
+        "All five strategies implemented: feed.py, filtered_html.py, json_api.py, search_form.py, waho.py",
+        "84 unit tests for source strategies all pass",
+        "normalize.py shared by all strategies; no site-specific logic"
+      ]
+    },
+    "3": {
+      "name": "Notification Channel Architecture",
+      "gate": "PARTIAL",
+      "requirements": {
+        "P3-01_generic_channel_boundary": "PARTIAL",
+        "P3-02_email_implementation": "PASS",
+        "P3-03_no_slack_teams_sms": "PASS",
+        "P3-04_no_provider_coupling_in_pipeline": "PASS"
+      },
+      "key_findings": [
+        "NotificationChannel Protocol and NotificationDispatcher defined in notifications/channels.py",
+        "PARTIAL: channels.py itself states the pipeline has not yet connected notification sending to coordinator",
+        "Email abstraction (SendlibProvider behind MailProvider) intact and tested"
+      ]
+    },
+    "4": {
+      "name": "Multilingual Document Understanding",
+      "gate": "PASS",
+      "requirements": {
+        "P4-01_native_pdf": "PASS",
+        "P4-02_scanned_ocr": "PASS",
+        "P4-03_docx": "PASS",
+        "P4-04_zip": "PASS",
+        "P4-05_multilingual_en_fr_pt": "PASS",
+        "P4-06_tables": "PASS",
+        "P4-07_reusable_bundle": "PASS",
+        "P4-08_failure_isolation": "PASS",
+        "P4-09_no_manual_preprocessing": "PASS"
+      },
+      "key_findings": [
+        "OCR lang confirmed as eng+fra+por in DocumentProcessingConfig",
+        "Per-segment language detection on ExtractedPage and ExtractedSection",
+        "105 processing unit tests all pass"
+      ]
+    },
+    "5": {
+      "name": "Knowledge Base & Retrieval Layer",
+      "gate": "PASS",
+      "requirements": {
+        "P5-01_kb_content_model": "PASS",
+        "P5-02_upload_edit_version": "PASS",
+        "P5-03_retrieval_abstraction": "PASS",
+        "P5-04_evidence_bounds": "PASS",
+        "P5-05_historical_reconstruction": "PASS",
+        "P5-06_stage_b_integration": "PASS",
+        "P5-07_no_unsupported_claims": "PASS"
+      },
+      "key_findings": [
+        "retrieve_relevant_evidence() bounded to max_items=8, max_chars=12000",
+        "Verdict.knowledge_base_version_id FK enables historical reconstruction",
+        "no-evidence-on-file enforcement verified in test_stage_b_completeness.py T7"
+      ]
+    },
+    "6": {
+      "name": "Stage B Requirement Completeness & Evidence",
+      "gate": "PASS",
+      "requirements": {
+        "P6-01_independent_requirement_set": "PASS",
+        "P6-02_requirement_provenance": "PASS",
+        "P6-03_requirement_to_assessment_mapping": "PASS",
+        "P6-04_model_omission_detection": "PASS",
+        "P6-05_evidence_in_verdict_claims": "PASS",
+        "P6-06_no_unsupported_negative_claims": "PASS",
+        "P6-07_incomplete_inputs": "PASS",
+        "P6-08_normal_worker_stage_b_wiring": "PASS",
+        "P6-09_verdict_schema": "PASS",
+        "P6-10_validation_retry": "PASS",
+        "P6-11_failure_handling": "PASS",
+        "P6-12_oversized_bundles": "PASS",
+        "P6-13_deadline_and_urgency": "PASS",
+        "P6-14_kb_provenance_in_verdict": "PASS",
+        "P6-15_idempotency": "PASS"
+      },
+      "key_findings": [
+        "BLOCKER F RESOLVED: worker/main.py::main() calls build_pipeline() which wires verdict_handoff",
+        "Two-pass extraction confirmed: separate LLM call for RequirementExtraction before assessment",
+        "12 unit tests in test_stage_b_completeness.py all pass including T4 model omission detection"
+      ]
+    },
+    "7": {
+      "name": "Configuration & Admin Extensibility",
+      "gate": "PARTIAL",
+      "requirements": {
+        "P7-01_source_crud": "PASS",
+        "P7-02_recipients": "PARTIAL",
+        "P7-03_kb_admin": "PASS",
+        "P7-04_triage_config": "PASS",
+        "P7-05_urgency_window": "PASS",
+        "P7-06_config_reload": "PASS",
+        "P7-07_startup_validation": "PASS",
+        "P7-08_dry_run": "PASS",
+        "P7-09_secret_safety": "PASS",
+        "P7-10_auditability": "PASS",
+        "P7-11_static_admin_ui": "PASS",
+        "P7-12_auth_removal_safety": "PASS"
+      },
+      "key_findings": [
+        "18 admin API tests all pass",
+        "PARTIAL: per-source recipient scoping not independently verified from test coverage",
+        "admin/auth.py deleted per documented project decision; no safety regression found"
+      ]
+    }
+  },
+  "requirement_counts": {
+    "total": 46,
+    "PASS": 43,
+    "PARTIAL": 3,
+    "FAIL": 0,
+    "BLOCKED": 0,
+    "UNVERIFIED": 0,
+    "N/A": 0
+  },
+  "critical_blockers": [
+    {
+      "id": "A",
+      "description": "Same-type sources cannot be added through configuration without source-specific code",
+      "status": "CLEARED",
+      "evidence": "AdapterRegistry + config-only extensibility test passes"
+    },
+    {
+      "id": "B",
+      "description": "One or more required source types not implemented/tested",
+      "status": "CLEARED",
+      "evidence": "All 5 strategies implemented and tested"
+    },
+    {
+      "id": "C",
+      "description": "Required PDF/OCR/DOCX/ZIP/multilingual behavior absent or unproven",
+      "status": "CLEARED",
+      "evidence": "105 processing unit tests pass"
+    },
+    {
+      "id": "D",
+      "description": "KB exists only as storage but cannot provide bounded relevant evidence",
+      "status": "CLEARED",
+      "evidence": "retrieve_relevant_evidence() bounded retrieval confirmed"
+    },
+    {
+      "id": "E",
+      "description": "Stage B relies on LLM to define its own requirements",
+      "status": "CLEARED",
+      "evidence": "Two-pass extraction with _validate_requirement_sources and _validate_semantics"
+    },
+    {
+      "id": "F",
+      "description": "Headless worker entrypoint does not construct/run Stage B",
+      "status": "CLEARED",
+      "evidence": "worker/main.py::main() calls build_pipeline() with verdict_handoff wired; 10 pipeline Stage B tests pass"
+    },
+    {
+      "id": "G",
+      "description": "Operational configuration still requires code deployment",
+      "status": "CLEARED",
+      "evidence": "ConfigLoader.load() called per-run; Admin API supports all required config operations"
+    },
+    {
+      "id": "H",
+      "description": "Test Mode, secrets, auditability, or worker independence weakened",
+      "status": "CLEARED",
+      "evidence": "Test Mode intact; credential encryption confirmed; audit logging confirmed"
+    }
+  ],
+  "open_defects": [
+    {
+      "id": "D1",
+      "prompt": "3",
+      "description": "NotificationDispatcher/NotificationChannel abstraction not wired into pipeline coordinator",
+      "severity": "MEDIUM",
+      "evidence": "channels.py itself states: 'pipeline has not yet connected notification sending to its coordinator'"
+    },
+    {
+      "id": "D2",
+      "prompt": "7",
+      "description": "Per-source recipient scoping not independently verified from test coverage",
+      "severity": "LOW"
+    }
+  ],
+  "known_separate_regressions": [
+    {
+      "test": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt",
+      "classification": "KNOWN EXISTING DEADLINE REGRESSION — PROMPT 12.1 OWNERSHIP",
+      "cause": "Garbled Unicode box characters □ in French date string fixture",
+      "pre_existing": true,
+      "caused_by_prompts_1_7": false
+    }
+  ],
+  "open_decisions": [
+    "Sender mailbox and production recipients",
+    "Production LLM provider selection",
+    "Paid mail provider tier selection",
+    "Storage provider decisions",
+    "OCR vendor (Tesseract default, open decision O18)"
+  ],
+  "tests": {
+    "unit_total_collected": 508,
+    "unit_passed": 507,
+    "unit_failed": 1,
+    "unit_failed_detail": "Known French deadline regression only",
+    "integration_verdict_engine": {"collected": 12, "passed": 12, "failed": 0},
+    "integration_processing_service": {"collected": 8, "passed": 8, "failed": 0},
+    "integration_source_extensibility": {"collected": 1, "passed": 1, "failed": 0},
+    "integration_admin_api": {"collected": 18, "passed": 18, "failed": 0},
+    "integration_orchestrator_stage_b_subset": {"collected": 10, "passed": 10, "failed": 0},
+    "integration_full_suite": "TIMED OUT — too slow for 3-minute limit"
+  },
+  "git_integrity": {
+    "product_code_modified_by_verification": false,
+    "tests_modified_by_verification": false,
+    "config_modified_by_verification": false,
+    "artifacts_created": [
+      "demo-evidence/prompts-1-7-independent-verification-report.md",
+      "demo-evidence/prompts-1-7-independent-verification-report.json",
+      "demo-evidence/prompts-1-7-independent-verification-results.txt"
+    ]
+  },
+  "final_gate": "PROMPTS 1–7: VERIFICATION OPEN — REMEDIATION REQUIRED"
+}

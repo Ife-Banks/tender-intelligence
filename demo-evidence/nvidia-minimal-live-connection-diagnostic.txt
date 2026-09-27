@@ -1,0 +1,7 @@
+NVIDIA MINIMAL LIVE CONNECTION: FAILED
+
+OPEX Admin health and profile lookup returned HTTP 200. The real Admin connection-test route called NVIDIA chat completions with a synthetic 64-token request, temperature 0, top_p 0.95, thinking disabled, no response_format, and no reasoning-budget field.
+
+NVIDIA returned no response headers within the existing 60-second timeout. OPEX returned HTTP 502 / timeout_before_http_response; phase: after_connection_before_response_headers. HTTP client error: ReadTimeout. Elapsed: 60.334 seconds.
+
+Verification: 23 focused Python tests passed, 11 UI API tests passed, Ruff passed. No credentials or response body are included.

@@ -1,0 +1,75 @@
+STAGE B REQUIREMENT COMPLETENESS SUMMARY
+=========================================
+Date: 2026-09-24
+
+FINDING ADDRESSED
+-----------------
+"Current validation can compare model-supplied requirements with model-supplied
+assessments without independently establishing that the requirement set is complete."
+
+MECHANISM
+---------
+The pipeline uses a two-pass approach in VerdictEngine.generate():
+
+  Pass 1 — Independent requirement extraction
+    - Separate LLM call with only tender documents (no KB, no company data)
+    - Output: RequirementExtraction { requirements: [MaterialRequirement] }
+    - Each MaterialRequirement carries: requirement text + source evidence
+      (document_id / location / exact quote from the real document)
+    - Validated by _validate_requirement_sources:
+        - Source evidence must cite real text at real locations
+        - No empty or duplicate requirement texts
+
+  Pass 2 — Assessment against the established set
+    - Input includes material_requirements from Pass 1 as authoritative
+    - Output: VerdictPayload with assessments list
+    - Validated by _validate_semantics:
+        - set(payload.requirements) == set(established)       [no omissions, no additions]
+        - set(assessed requirements) == set(established)      [no missing, no orphans]
+        - Each assessment includes its Pass 1 source evidence [provenance preserved]
+        - incomplete_inputs flag must match the bundle
+        - Unsupported assessments must say "no evidence on file"
+        - Verdict derived deterministically from assessment statuses
+
+COMPLETENESS RULES THAT PREVENT THE ATTACK VECTOR
+--------------------------------------------------
+1. Model omits R3 from requirements list       → REJECTED (set equality)
+2. Model omits R3 assessment                   → REJECTED (set equality)
+3. Model adds R99 (not in established set)     → REJECTED (set equality)
+4. Model strips source evidence from R1        → REJECTED (provenance coverage)
+5. Model claims complete when bundle failed    → REJECTED (incomplete_inputs mismatch)
+6. Model makes unsupported absence claim       → REJECTED ("no evidence on file" required)
+7. Verdict label inconsistent with statuses    → REJECTED (deterministic verdict check)
+
+UNIT TEST MATRIX (12 tests, all pass)
+--------------------------------------
+T1  test_complete_requirement_set_passes_validation           PASS
+T2  test_missing_assessment_is_rejected                       PASS
+T3  test_orphan_assessment_is_rejected                        PASS
+T4  test_model_omission_of_established_requirement_is_rejected PASS
+T5  test_incomplete_inputs_flag_is_propagated_to_payload      PASS
+T6  test_evidence_backed_requirement_assessment_...           PASS
+T7  test_no_kb_evidence_says_no_evidence_on_file_...          PASS
+T8  test_unverified_requirements_produce_apply_with_conditions PASS
+B1  test_requirement_sources_accepts_valid_extraction         PASS
+B2  test_requirement_sources_rejects_invented_location        PASS
+B3  test_requirement_sources_rejects_empty_requirement_text   PASS
+B4  test_requirement_sources_rejects_duplicate_requirements   PASS
+
+INTEGRATION TESTS (pre-existing, all still pass)
+------------------------------------------------
+test_independently_extracted_requirements_all_assessed        PASS
+test_incomplete_or_orphaned_...[missing_assessment]           PASS
+test_incomplete_or_orphaned_...[orphan_assessment]            PASS
+test_incomplete_or_orphaned_...[model_omission]               PASS
+test_incomplete_bundle_flag_is_forwarded_and_persisted        PASS
+
+FILES
+-----
+NEW:      tests/unit/test_stage_b_completeness.py
+UNCHANGED: src/tender_intelligence/verdict/service.py
+           (all completeness logic was pre-existing and correct)
+
+GATE
+----
+STAGE B REQUIREMENT COMPLETENESS: IMPLEMENTED — READY FOR INDEPENDENT VERIFICATION

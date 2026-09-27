@@ -1,0 +1,7 @@
+LIVE NVIDIA + SENDLIB E2E: NEEDS FIXES
+
+Offline verification: 32 Python tests passed, 11 Admin UI API tests passed, Ruff passed.
+The supplied live Admin connection test returned 502 provider_test_failed. A retry timed out and the local Admin service became unreachable.
+No live NVIDIA completion, Stage A/B run, persisted verdict, Sendlib call, or real email was verified.
+The code now supports NVIDIA reasoning parameters and safe request provenance; apply migration 0014 and restart Admin before retrying.
+No secrets or real email were included in the artifacts. Context7 MCP was unavailable in this session.

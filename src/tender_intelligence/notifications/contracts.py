@@ -9,8 +9,14 @@ importing or reimplementing either stage.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
-from tender_intelligence.mail.templates import NotificationKind
+
+class NotificationKind(StrEnum):
+    """Channel-neutral category for a new-tender notice or a material update."""
+
+    NEW = "new"
+    UPDATE = "update"
 
 
 @dataclass(frozen=True)
@@ -34,4 +40,16 @@ class NotificationEvent:
     correlation_id: str | None = None
 
 
-__all__ = ["NotificationEvent"]
+@dataclass(frozen=True)
+class NotificationOutcome:
+    """Channel-neutral delivery outcome, including the existing audit record identity."""
+
+    status: str
+    notification_log_id: int | None = None
+    provider_used: str | None = None
+    possible_duplicate: bool = False
+    error_code: str | None = None
+    dedupe_key: str = ""
+
+
+__all__ = ["NotificationEvent", "NotificationKind", "NotificationOutcome"]

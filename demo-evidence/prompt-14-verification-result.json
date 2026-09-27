@@ -1,0 +1,46 @@
+{
+  "prompt": "14",
+  "stage": "AI_VERDICT",
+  "status": "NEEDS_FIXES",
+  "ready_to_close": false,
+  "implementation_inspected": true,
+  "stage_b_engine_unit_integration_tests_passed": true,
+  "normal_runtime_stage_b_wired": false,
+  "triage_pass_gate_verified": true,
+  "triage_discard_failure_blocked": true,
+  "verdict_persistence_verified": true,
+  "provider_approval_boundary_verified_for_tested_paths": true,
+  "validation_retry_verified_for_invalid_json": true,
+  "transport_retry_verified_for_timeout": true,
+  "budget_100_percent_gate_verified": true,
+  "incomplete_input_flag_verified": true,
+  "evidence_chain_fully_verified": false,
+  "all_verdict_derivations_verified": false,
+  "deadline_state_matrix_verified": false,
+  "urgency_boundary_matrix_verified": false,
+  "oversized_map_reduce_verified": false,
+  "kb_version_history_verified": false,
+  "alert_and_downstream_failure_contract_verified": false,
+  "formatter_no_send_boundary_verified": true,
+  "full_pipeline_integration_verified": false,
+  "test_mode_preserved": true,
+  "business_email_sent": false,
+  "tests": {
+    "verdict_engine": {"run": 8, "passed": 8, "failed": 0},
+    "focused_regression": {"failed": 1, "known_failure": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt"},
+    "full_suite": {"run": 619, "passed": 618, "failed": 1, "known_failure": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt"}
+  },
+  "defects": [
+    {"severity": "HIGH", "owner": "Prompt 14 integration", "summary": "Default RunCoordinator skips Stage B unless verdict_handoff is injected."},
+    {"severity": "HIGH", "owner": "Prompt 12.1 deadline resolution", "summary": "French WAHO date_limite July GMT fixture fails to parse."}
+  ],
+  "remaining_verification_gaps": [
+    "Adversarial tender/KB evidence citation and requirement completeness matrix",
+    "All verdict labels and assessment derivation fixtures",
+    "Resolved/unresolved/conflicting deadline and urgency boundary matrix",
+    "Oversized bundle map/reduce and provenance behavior",
+    "KB v1/v2 historical version behavior",
+    "80% budget alert, 429/5xx/permanent retry, fallback rejection, alert persistence, and end-to-end partial bundle behavior"
+  ],
+  "implementation_changes_made": 0
+}

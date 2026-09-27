@@ -35,8 +35,9 @@ class EnvSettings(BaseSettings):
     link_base_url: str = Field(default="https://archive.example.invalid")
     #: [PROPOSED technical guard] Admin KB upload ceiling; can be lowered per environment.
     admin_max_kb_upload_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
-    #: Test-only header actor mechanism; production auth remains an injectable O11 seam.
-    admin_enable_test_auth: bool = False
+    #: How often the Admin-hosted source scheduler checks configured source intervals.
+    scheduler_poll_seconds: int = Field(default=15, gt=0, le=3600)
+    scheduler_enabled: bool = True
     environment: str = Field(default="production", validation_alias="TI_ENV")
 
     @property

@@ -31,11 +31,12 @@
 ### Test-provider restrictions
 - Test providers (DeepSeek's own API, hosted gateways, third-party relays) run on **public tender text only**, with a placeholder/non-sensitive knowledge base. (v1.1 §5.9.4)
 
-### Admin authentication & authorization
-- Admin app is **authenticated users only**; at least Admin and Viewer roles [PROPOSED]. (v1.1 §5.11)
-- **Viewers never see knowledge base or secrets.** (v1.1 §5.11)
-- Exact login method and user provisioning = **open decision** (`docs/13-open-decisions.md`).
-- Secrets in `ConfigChangeLog`: never stored — only field names metadataned. (v1.1 §7)
+### Admin application access
+- **Current decision:** application-level authentication/login is deferred for this internal-tool version; Admin UI/API operation does not require an application session (`docs/13-open-decisions.md`, O11).
+- No Admin/Viewer identity roles are implemented for the current release. This is not approval to expose the service publicly; deployment/network restrictions are a separate operational concern.
+- No production identity provider is configured. Revisit only if the owner changes the scope.
+- Secrets remain server-side, write-only, encrypted at rest, and excluded from API responses/logs/audit values.
+- Secrets in `ConfigChangeLog` are never stored — only field-name metadata is recorded. (v1.1 §7)
 
 ### Audit logs
 - Configuration changes: actor, entity, changed fields, timestamp. (v1.1 §7)
@@ -68,10 +69,10 @@ These satisfy the requirements but are implementation choices to be validated:
 1. Secrets are write-only, encrypted at rest, never logged or returned.
 2. Master key outside the database.
 3. Unapproved LLM profiles cannot receive company KB content — even as fallback.
-4. KB and secrets hidden from Viewer role.
+4. Credential and secret values are never returned to the Admin UI or stored in audit values.
 5. Admin test ops are dry-runs (no data writes, no business sends).
 6. Secure links are signed and expiring; storage paths never exposed.
-7. Audit trail records who changed what, without values that are secret.
+7. Audit trail records what changed and when without secret values; while login is deferred, configuration actor attribution is `internal-admin-api`, not a human identity.
 8. Security notes before go-live inventory every third party that sees data, with an owner.
 
 ## 10.4 Historical note

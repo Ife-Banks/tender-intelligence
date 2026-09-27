@@ -1,0 +1,45 @@
+{
+  "acceptance": "LIVE NVIDIA + SENDLIB E2E: NEEDS FIXES",
+  "date": "2026-09-26",
+  "timezone": "Africa/Lagos",
+  "repository_commit": "16b6543",
+  "working_tree_changes_present": true,
+  "context7_mcp_available": false,
+  "provider": {
+    "name": "NVIDIA",
+    "base_url": "https://integrate.api.nvidia.com/v1",
+    "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "api_key_configured": true,
+    "api_key_value_recorded": false,
+    "company_document_approval_configured": true,
+    "live_request_succeeded": false
+  },
+  "tests": {
+    "nvidia_client_construction": {"type": "offline", "status": "passed"},
+    "nvidia_live_smoke_call": {"type": "live", "status": "not_verified", "detail": "Prior attempt timed out; local Admin service subsequently became unreachable."},
+    "admin_connection_test": {"type": "live", "status": "failed_unverified", "observed_http": 502, "safe_error_code": "provider_test_failed"},
+    "stage_a": {"type": "live", "status": "not_run"},
+    "stage_b": {"type": "live", "status": "not_run"},
+    "verdict_persistence": {"type": "live", "status": "not_run"},
+    "sendlib_connection": {"type": "live", "status": "not_run"},
+    "email_notification": {"type": "live", "status": "not_run", "real_email_sent": false},
+    "end_to_end_tender": {"type": "live", "status": "not_run"},
+    "nvidia_auth_failure": {"type": "mocked", "status": "not_verified_in_this_run"},
+    "nvidia_timeout": {"type": "mocked", "status": "not_verified_in_this_run"},
+    "nvidia_429": {"type": "mocked", "status": "not_verified_in_this_run"},
+    "malformed_output_validation_retry": {"type": "mocked", "status": "not_verified_in_this_run"},
+    "sendlib_failure": {"type": "mocked", "status": "not_verified_in_this_run"},
+    "test_mode_enforcement": {"type": "automated", "status": "not_verified_in_this_run"},
+    "llm_request_provenance": {"type": "offline", "status": "passed"}
+  },
+  "offline_checks": {
+    "python_pytest": {"status": "passed", "passed": 32, "failed": 0},
+    "javascript_live_api_tests": {"status": "passed", "passed": 11, "failed": 0},
+    "ruff": {"status": "passed"}
+  },
+  "notes": [
+    "The local /v1/models 404 is not the OPEX chat-completions connection test route.",
+    "The request-format adjustment is based on NVIDIA's published API shape but is not confirmed by a successful live response.",
+    "No credentials, recipient, sender address, provider response body, or email content are stored in this artifact."
+  ]
+}

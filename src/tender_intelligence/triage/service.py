@@ -181,10 +181,15 @@ class TriageService:
                         error_code=last_error,
                         duration_ms=_elapsed_ms(started, self._clock()),
                     )
-                    if last_error == AI_CALL_TIMEOUT and retry < DEFAULT_MODEL_RETRIES:
+                    _is_transient = last_error in {
+                        AI_CALL_TIMEOUT,
+                        "provider_unreachable",
+                        "timeout_before_http_response",
+                    }
+                    if _is_transient and retry < DEFAULT_MODEL_RETRIES:
                         self._sleeper(0.25 * (2**retry))
                         continue
-                    if last_error == AI_CALL_TIMEOUT:
+                    if _is_transient:
                         break
                     return self._persist_failure(
                         tender, mode="model", error_code=last_error, profile=candidate
@@ -221,6 +226,7 @@ class TriageService:
                         tokens_in=response.usage.prompt_tokens if response.usage else None,
                         tokens_out=response.usage.completion_tokens if response.usage else None,
                         est_cost=response.usage.estimated_cost_usd if response.usage else None,
+                        request_config=(response.raw or {}).get("request_config"),
                     )
                     break
             if response is not None:
@@ -252,6 +258,7 @@ class TriageService:
         tokens_in: int | None = None,
         tokens_out: int | None = None,
         est_cost: float | None = None,
+        request_config: dict[str, Any] | None = None,
     ) -> None:
         self.session.add(
             LLMCall(
@@ -264,6 +271,13 @@ class TriageService:
                 est_cost=est_cost,
                 status=status,
                 error_code=error_code,
+                request_config=request_config or {
+                    "temperature": profile.temperature,
+                    "top_p": profile.top_p,
+                    "max_tokens": profile.max_output_tokens,
+                    "enable_thinking": profile.enable_thinking,
+                    "reasoning_budget": profile.reasoning_budget,
+                },
             )
         )
 

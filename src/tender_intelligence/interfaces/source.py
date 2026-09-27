@@ -10,8 +10,25 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 
 from tender_intelligence.core.errors import SOURCE_UNREACHABLE
+
+
+class SourceType(StrEnum):
+    """Source parsing strategies defined by v1.1 §5.1.
+
+    All five have a production adapter, registered in
+    :class:`~tender_intelligence.orchestrator.registry.AdapterRegistry`: they are peers
+    selected by a source's configuration, not stages of one strategy. ``wahoo`` remains a
+    registered legacy alias of :attr:`PAGINATED_HTML`.
+    """
+
+    PAGINATED_HTML = "paginated_html_list"
+    FILTERED_HTML = "filtered_html"
+    SEARCH_FORM = "search_form"
+    RSS_ATOM = "rss_atom"
+    JSON_API = "json_api"
 
 
 @dataclass(frozen=True)

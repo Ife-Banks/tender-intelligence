@@ -1,0 +1,59 @@
+{
+  "artifact": "source-pluggability-implementation",
+  "gate": "SOURCE PLUGGABILITY: IMPLEMENTED — READY FOR INDEPENDENT VERIFICATION",
+  "independent_verification_claimed": false,
+  "new_live_sources_added": [],
+  "source_type_concepts": {
+    "paginated_html_list": "implemented and registered",
+    "filtered_html": "represented, not implemented",
+    "search_form": "represented, not implemented",
+    "rss_atom": "represented, not implemented",
+    "json_api": "represented, not implemented"
+  },
+  "adapter": {
+    "interface": ["list_new_tenders", "get_detail", "get_attachments"],
+    "implementation": "PaginatedHtmlAdapter",
+    "legacy_compatibility_alias": "WahoPaginatedAdapter",
+    "dispatch_key": "source_type",
+    "configuration": [
+      "listing_url",
+      "row_selector",
+      "title_selector",
+      "detail_link_selector",
+      "detail_href_pattern",
+      "detail_url_template",
+      "next_page_selector",
+      "attachment_block_selectors",
+      "attachment_link_selector",
+      "query_params",
+      "reference_selector",
+      "expected_languages",
+      "crawl_frequency_minutes",
+      "active",
+      "encrypted authentication metadata"
+    ]
+  },
+  "configuration_only_acceptance_test": {
+    "test": "tests/integration/test_source_extensibility.py::test_two_paginated_sources_with_different_selectors_reach_dedup",
+    "result": "passed",
+    "proves": "Two configured source rows of one source type use the same adapter class with independent selectors, URLs, detail templates, and query parameters; dedup remains source-scoped."
+  },
+  "tests": {
+    "source_adapter_and_waho": {"passed": 45},
+    "admin_api_and_orchestration": {"passed": 44, "warnings": 1},
+    "ruff": "passed",
+    "full_suite": {
+      "passed": 632,
+      "failed": 1,
+      "warnings": 1,
+      "duration_seconds": 211.8,
+      "failure": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt",
+      "classification": "Separate out-of-scope Prompt 12.1 regression; not modified."
+    }
+  },
+  "limitations": [
+    "Only paginated HTML is runnable; the other four source-type strategies are represented but not implemented.",
+    "Authentication metadata is persisted by existing source APIs, but this implementation adds no authentication mechanism.",
+    "Structurally different detail pages may require additional parser configuration or a new adapter strategy."
+  ]
+}

@@ -1,0 +1,255 @@
+{
+  "remediation_metadata": {
+    "prompt": "prompt-14",
+    "task": "wire_verdict_engine_into_normal_runtime",
+    "severity": "HIGH",
+    "status": "RESOLVED",
+    "remediation_date": "2026-09-24",
+    "verification_report": "demo-evidence/prompt-14-verification-report.md",
+    "remediation_report": "demo-evidence/prompt-14-remediation-report.md"
+  },
+  "problem_summary": {
+    "defect": "Normal runtime does not execute Stage B (VerdictEngine)",
+    "root_cause": "worker/main.py is a Phase-0 bootstrap stub with no coordinator construction",
+    "impact": "Production deployments would skip Stage B verdict generation entirely",
+    "scope": "Normal runtime (worker entrypoint)"
+  },
+  "solution_summary": {
+    "approach": "Added build_pipeline() function to worker/main.py that mirrors admin's construction pattern",
+    "key_change": "Always wires verdict_handoff=build_verdict_handoff(...) with _profile_client_factory wrapper",
+    "consistency": "Mirrors admin/main.py._compose_run_coordinator structure exactly",
+    "regression_protection": "3 new tests prove end-to-end Stage B execution in production construction path"
+  },
+  "files_modified": {
+    "src/tender_intelligence/worker/main.py": {
+      "changes": [
+        "Added build_pipeline() function (55 lines)",
+        "Added TYPE_CHECKING imports for proper typing",
+        "Added type: ignore[arg-type] comment matching admin pattern"
+      ],
+      "lines_added": 58,
+      "lines_deleted": 0
+    },
+    "tests/integration/test_orchestrator_pipeline.py": {
+      "changes": [
+        "Added test_build_pipeline_wires_stage_b_and_verdict_is_persisted (27 lines)",
+        "Added test_build_pipeline_stage_b_not_invoked_for_non_pass_triage (24 lines)",
+        "Added test_build_pipeline_stage_b_failure_is_recorded_not_skipped (27 lines)"
+      ],
+      "lines_added": 78,
+      "lines_deleted": 0
+    }
+  },
+  "test_evidence": {
+    "new_tests": [
+      {
+        "name": "test_build_pipeline_wires_stage_b_and_verdict_is_persisted",
+        "file": "tests/integration/test_orchestrator_pipeline.py",
+        "purpose": "Prove triage PASS → Stage B executes → verdict row persisted",
+        "approach": "Mock LLM transport with offline verdict JSON response",
+        "outcome": "PASSED"
+      },
+      {
+        "name": "test_build_pipeline_stage_b_not_invoked_for_non_pass_triage",
+        "file": "tests/integration/test_orchestrator_pipeline.py",
+        "purpose": "Prove Stage B skips non-PASS triage decisions (discard/failure)",
+        "approach": "Parametrized test with DISCARD and FAILURE outcomes",
+        "outcome": "PASSED (2 cases)"
+      },
+      {
+        "name": "test_build_pipeline_stage_b_failure_is_recorded_not_skipped",
+        "file": "tests/integration/test_orchestrator_pipeline.py",
+        "purpose": "Prove Stage B PARTIAL when provider fails (not SKIPPED)",
+        "approach": "Mock LLM raises exception, assert verdict row with PARTIAL_NO_ANSWER",
+        "outcome": "PASSED"
+      }
+    ],
+    "test_execution": {
+      "command": "uv run pytest tests/integration/test_orchestrator_pipeline.py::test_build_pipeline_* -v",
+      "total_tests": 4,
+      "passed": 4,
+      "failed": 0,
+      "duration_seconds": 6.11,
+      "output_summary": "4 passed in 6.11s"
+    },
+    "existing_tests_stability": {
+      "verdict_engine_tests": {
+        "file": "tests/integration/test_verdict_engine.py",
+        "total": 8,
+        "passed": 8,
+        "failed": 0,
+        "duration_seconds": 2.28
+      },
+      "orchestrator_verdict_tests": {
+        "file": "tests/integration/test_orchestrator_pipeline.py",
+        "total": 3,
+        "passed": 3,
+        "failed": 0,
+        "note": "Existing verdict handoff tests unchanged"
+      }
+    }
+  },
+  "verification_compliance": {
+    "prompt_14_requirements": [
+      {
+        "requirement": "Stage B must be wired in normal runtime",
+        "status": "SATISFIED",
+        "evidence": "build_pipeline() always wires verdict_handoff"
+      },
+      {
+        "requirement": "Must call build_verdict_handoff(...)",
+        "status": "SATISFIED",
+        "evidence": "Line 107-109 of worker/main.py"
+      },
+      {
+        "requirement": "Must use _profile_client_factory wrapper",
+        "status": "SATISFIED",
+        "evidence": "Lines 80-92 mirror admin pattern"
+      },
+      {
+        "requirement": "Must skip Stage B when triage != PASS",
+        "status": "SATISFIED",
+        "evidence": "test_build_pipeline_stage_b_not_invoked_for_non_pass_triage"
+      },
+      {
+        "requirement": "Must record PARTIAL when provider fails",
+        "status": "SATISFIED",
+        "evidence": "test_build_pipeline_stage_b_failure_is_recorded_not_skipped"
+      },
+      {
+        "requirement": "Must persist verdict row on success",
+        "status": "SATISFIED",
+        "evidence": "test_build_pipeline_wires_stage_b_and_verdict_is_persisted"
+      },
+      {
+        "requirement": "No weakening of existing tests (§10)",
+        "status": "SATISFIED",
+        "evidence": "All 11 existing tests unchanged and passing"
+      }
+    ],
+    "verification_report_gaps": [
+      {
+        "gap": "Normal runtime does not execute Stage B",
+        "resolution": "FIXED - build_pipeline() wires it"
+      },
+      {
+        "gap": "Worker has no coordinator construction",
+        "resolution": "FIXED - Added canonical construction path"
+      },
+      {
+        "gap": "Test harness conditionally wires",
+        "resolution": "PRESERVED - §19-A test still expects SKIPPED"
+      }
+    ]
+  },
+  "type_safety": {
+    "mypy_status": "MINOR_WARNINGS",
+    "warnings": [
+      {
+        "file": "src/tender_intelligence/worker/main.py",
+        "line": 80,
+        "type": "no-untyped-def",
+        "function": "_profile_client_factory",
+        "note": "Inner function lacks annotation - matches admin pattern"
+      },
+      {
+        "file": "src/tender_intelligence/worker/main.py",
+        "line": 84,
+        "type": "no-untyped-def",
+        "function": "create",
+        "note": "Inner function lacks annotation - matches admin pattern"
+      }
+    ],
+    "suppressions": [
+      {
+        "file": "src/tender_intelligence/worker/main.py",
+        "line": 107,
+        "type": "arg-type",
+        "reason": "build_verdict_handoff returns Callable[[TriageDecision], object] but RunCoordinator expects Callable[[TriageDecision], None] | None - pre-existing issue in verdict/runtime.py, suppressed for consistency with admin/main.py"
+      }
+    ],
+    "ruff_status": "PASSED",
+    "ruff_output": "All checks passed!"
+  },
+  "integration_points": {
+    "verdict_engine_class": {
+      "status": "USED",
+      "evidence": "Called via build_verdict_handoff"
+    },
+    "build_verdict_handoff_factory": {
+      "status": "USED",
+      "evidence": "Line 107-109 of worker/main.py"
+    },
+    "triage_decision_proceeds_to_verdict": {
+      "status": "CHECKED",
+      "evidence": "Engine checks before executing"
+    },
+    "verdict_summary_table": {
+      "status": "POPULATED",
+      "evidence": "Test asserts row exists"
+    },
+    "verdict_client_unavailable_outcome": {
+      "status": "RECORDED",
+      "evidence": "When llm_client_factory=None"
+    }
+  },
+  "deployment_guidance": {
+    "canonical_usage": {
+      "module": "tender_intelligence.worker.main",
+      "function": "build_pipeline",
+      "signature": "build_pipeline(sessions, storage, *, llm_client_factory=None, triage_client_factory=None)",
+      "returns": "tuple[RunCoordinator, Worker, PoliteHttpClient, DocumentFetcher, AdapterRegistry]"
+    },
+    "behavior_matrix": [
+      {
+        "triage_client_factory": "None",
+        "llm_client_factory": "None",
+        "stage_a": "SKIPPED",
+        "stage_b": "Not invoked",
+        "outcome": "Normal (no triage/verdicts)"
+      },
+      {
+        "triage_client_factory": "Present",
+        "llm_client_factory": "None",
+        "stage_a": "Executes",
+        "stage_b": "PARTIAL_NO_ANSWER",
+        "outcome": "Stage A runs, B records unavailable"
+      },
+      {
+        "triage_client_factory": "None",
+        "llm_client_factory": "Present",
+        "stage_a": "SKIPPED",
+        "stage_b": "Not invoked",
+        "outcome": "Contradictory (won't reach B)"
+      },
+      {
+        "triage_client_factory": "Present",
+        "llm_client_factory": "Present",
+        "stage_a": "Executes",
+        "stage_b": "Executes",
+        "outcome": "Normal (full pipeline)"
+      }
+    ],
+    "recommendation": "Pass both triage_client_factory and llm_client_factory or neither for consistent behavior"
+  },
+  "future_work": [
+    {
+      "item": "Type safety enhancement",
+      "description": "Fix verdict_handoff return type mismatch in verdict/runtime.py",
+      "tracked_in": "admin/main.py line 62 (same issue)",
+      "priority": "LOW"
+    },
+    {
+      "item": "Test harness alignment",
+      "description": "Add --wire-verdict flag to test harness for explicit opt-in",
+      "benefit": "Makes §19-A expectation of SKIPPED more explicit",
+      "priority": "LOW"
+    }
+  ],
+  "conclusion": {
+    "status": "RESOLVED",
+    "severity_change": "HIGH → FIXED",
+    "risk_assessment": "Low (matches admin pattern, guarded by tests)",
+    "summary": "Normal runtime now executes Stage B via canonical build_pipeline() construction path. All requirements satisfied, no existing tests weakened, full regression coverage added."
+  }
+}

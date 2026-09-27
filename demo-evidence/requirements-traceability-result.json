@@ -1,0 +1,1334 @@
+{
+  "audit": "requirements-to-implementation-traceability",
+  "specification": "source-docs/tender-intelligence-spec-v1.1.md",
+  "spec_revision": "v1.1, 2026-09-21",
+  "verification_mode": "read-only repository and existing behavioral evidence audit",
+  "baseline_commit": "16b654383a0f6633f8eeaea4bc0bbe9b098bc883",
+  "product_code_modified": false,
+  "prompt_17_started": false,
+  "status": "COMPLETE_WITH_GAPS",
+  "requirements_count": 102,
+  "implementation_status_counts": {
+    "BLOCKED BY OPEN DECISION": 2,
+    "IMPLEMENTED — UNVERIFIED": 13,
+    "MISSING": 2,
+    "NOT APPLICABLE": 7,
+    "PARTIAL": 27,
+    "VERIFIED": 51
+  },
+  "disposition_counts": {
+    "MANDATORY": 84,
+    "MANDATORY (absence in v1)": 1,
+    "MANDATORY + optional proposal": 1,
+    "NON-GOAL": 4,
+    "NON-GOAL/GUIDANCE": 1,
+    "OPEN DECISION": 1,
+    "PROPOSED": 5,
+    "PROPOSED (quality rule)": 3,
+    "PROPOSED in source v1.1; superseded by current O11 decision": 1,
+    "PROPOSED/FUTURE": 1
+  },
+  "requirements": [
+    {
+      "id": "ARC-001",
+      "spec_ref": "§4.1, §10",
+      "requirement": "Core runs as a headless worker, separate from Admin UI",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`src/tender_intelligence/worker/main.py`; `orchestrator/worker.py::Worker`",
+      "test_and_behavioral_evidence": "`tests/integration/test_worker.py`; worker tests passed in Prompt 16C audit",
+      "gap_or_note": "Admin starts separately; no browser state in worker."
+    },
+    {
+      "id": "ARC-002",
+      "spec_ref": "§4.1",
+      "requirement": "Admin API/UI and worker use shared DB and document storage",
+      "disposition": "MANDATORY",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "`admin/main.py::create_app`; `db/engine.py`; `storage/interface.py`",
+      "test_and_behavioral_evidence": "Admin/persistence tests use shared injected engine/storage",
+      "gap_or_note": "Current production deployment sharing not independently inspected."
+    },
+    {
+      "id": "ARC-003",
+      "spec_ref": "§4.1",
+      "requirement": "Worker reloads configuration at each run, without retaining stale settings across runs",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`orchestrator/config.py::ConfigLoader`; `orchestrator/coordinator.py::RunCoordinator`",
+      "test_and_behavioral_evidence": "`tests/integration/test_config_loader.py`; `test_orchestrator_pipeline.py`; AC G5",
+      "gap_or_note": "Passes code/test trace; no production long-lived multi-run soak test."
+    },
+    {
+      "id": "ARC-004",
+      "spec_ref": "§4.1",
+      "requirement": "Admin outage does not stop scheduled worker using saved configuration",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "Worker entry point and DB-backed `ConfigLoader`, independent of Admin app composition",
+      "test_and_behavioral_evidence": "`tests/integration/test_worker.py`; AC A2-related worker path",
+      "gap_or_note": "No separate live outage drill."
+    },
+    {
+      "id": "ARC-005",
+      "spec_ref": "§4.1, §5.11",
+      "requirement": "Admin source test/connection checks are dry-run/test-only, not inline production work",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`admin/api.py` source/provider test routes; existing coordinator/service seams",
+      "test_and_behavioral_evidence": "`test_real_coordinator_source_dry_run_has_no_persisted_side_effects`; provider tests are mocked",
+      "gap_or_note": "Actual third-party calls were deliberately not made."
+    },
+    {
+      "id": "ARC-006",
+      "spec_ref": "§2, §5.8",
+      "requirement": "Common operational configuration changes take effect without code deployment",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "DB-backed Admin API configuration endpoints; worker `ConfigLoader`",
+      "test_and_behavioral_evidence": "`test_ui_payload_shapes_persist_config_and_audit_without_external_services`",
+      "gap_or_note": "Supported fields work in tests; generic source type/config-only extensibility and deployed reload are incomplete/unverified."
+    },
+    {
+      "id": "SRC-001",
+      "spec_ref": "§5.1",
+      "requirement": "Source records hold name, URLs, type, frequency, languages, auth, active state, parser config, optional recipient scope",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`db/models/sources.py::Source`; source DTOs in `admin/api.py`",
+      "test_and_behavioral_evidence": "`tests/integration/test_admin_api_prompt15.py`; source persistence tests",
+      "gap_or_note": "Secrets are write-only/encrypted; source fields verified through API payload."
+    },
+    {
+      "id": "SRC-002",
+      "spec_ref": "§5.1",
+      "requirement": "Sources can be added, edited, disabled without deployment",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`admin/api.py` source CRUD; `config/loader.py`",
+      "test_and_behavioral_evidence": "`test_source_crud_and_dry_run_have_no_pipeline_writes`; Prompt 16B integration persistence test",
+      "gap_or_note": "Only currently supported adapter types can actually run."
+    },
+    {
+      "id": "SRC-003",
+      "spec_ref": "§5.1",
+      "requirement": "Active source reachability/config validation warns rather than crashing the application",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`orchestrator/registry.py`; source scheduler/worker error handling",
+      "test_and_behavioral_evidence": "Source failure and health tests",
+      "gap_or_note": "Startup validation of every active source's reachability on each reload is not evidenced; operational reachability occurs during crawl."
+    },
+    {
+      "id": "SRC-004",
+      "spec_ref": "§5.1",
+      "requirement": "Source abstraction isolates source-specific parsing and permits a new source of a supported type by configuration alone",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`interfaces/source.py::SourceAdapter`; `orchestrator/registry.py::AdapterRegistry`; `sources/waho.py::WahoPaginatedAdapter`",
+      "test_and_behavioral_evidence": "`demo-evidence/source-extensibility-audit.md`",
+      "gap_or_note": "Audit found only WAHO-bound adapter, hard-coded WAHO detail routes and no generic paginated adapter; config-only claim is not established."
+    },
+    {
+      "id": "SRC-005",
+      "spec_ref": "§5.1",
+      "requirement": "Paginated HTML listing strategy",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`sources/waho.py::WahoPaginatedAdapter`",
+      "test_and_behavioral_evidence": "`tests/unit/test_waho_discovery.py`; source extensibility audit",
+      "gap_or_note": "WAHO-specific implementation works; generic type strategy not demonstrated."
+    },
+    {
+      "id": "SRC-006",
+      "spec_ref": "§5.1",
+      "requirement": "Filtered/faceted HTML and configured query filters",
+      "disposition": "MANDATORY",
+      "implementation_status": "MISSING",
+      "implementation_evidence": "No generic filtered/faceted adapter/config behavior found",
+      "test_and_behavioral_evidence": "No matching behavioral test found",
+      "gap_or_note": "All Business Africa example remains unimplemented."
+    },
+    {
+      "id": "SRC-007",
+      "spec_ref": "§5.1",
+      "requirement": "Search-form-driven listing strategy",
+      "disposition": "MANDATORY",
+      "implementation_status": "MISSING",
+      "implementation_evidence": "No search-form/UNGM adapter found",
+      "test_and_behavioral_evidence": "No matching test found",
+      "gap_or_note": "UNGM example remains unimplemented."
+    },
+    {
+      "id": "SRC-008",
+      "spec_ref": "§5.1",
+      "requirement": "RSS/Atom and JSON API source types are easy to add as their own types",
+      "disposition": "PROPOSED/FUTURE",
+      "implementation_status": "NOT APPLICABLE",
+      "implementation_evidence": "No RSS/Atom or JSON API adapters",
+      "test_and_behavioral_evidence": "No tests",
+      "gap_or_note": "Table calls these future sources; treat as extension path, not delivered v1 adapter requirement."
+    },
+    {
+      "id": "DISC-001",
+      "spec_ref": "§5.2",
+      "requirement": "Active sources run on configured schedules",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`orchestrator/scheduler.py::SourceScheduler`; `orchestrator/worker.py::Worker`",
+      "test_and_behavioral_evidence": "scheduler/worker integration tests",
+      "gap_or_note": "Local schedule mechanism exists; no verified production scheduler process/deployment cadence."
+    },
+    {
+      "id": "DISC-002",
+      "spec_ref": "§5.2",
+      "requirement": "Crawling respects robots.txt, rate limits, User-Agent, and error backoff",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`sources/polite.py::PoliteHttpClient`, `CrawlPolicy`",
+      "test_and_behavioral_evidence": "`tests/integration/test_source_extensibility.py`, `test_waho_discovery.py`; AC S4",
+      "gap_or_note": "External live-site policy not independently tested in this audit."
+    },
+    {
+      "id": "DISC-003",
+      "spec_ref": "§5.2",
+      "requirement": "Persist seen tender identity per source and avoid reprocessing/re-notifying unchanged listings",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`dedup/service.py::DedupService`; tender unique identity model",
+      "test_and_behavioral_evidence": "`tests/integration/test_dedup_service.py`; `tests/integration/test_orchestrator_pipeline.py`; AC W1/N4",
+      "gap_or_note": "Provider ambiguous-timeout exception is separately recorded under mail requirements."
+    },
+    {
+      "id": "DISC-004",
+      "spec_ref": "§5.2",
+      "requirement": "Material updates (e.g., addendum/deadline) are distinct lower-priority events and can use update template",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`dedup/classify.py`; coordinator update path; `mail/templates.py` update rendering",
+      "test_and_behavioral_evidence": "`tests/unit/test_dedup_classify.py`",
+      "gap_or_note": "Material update detection exists; end-to-end update notification/regeneration contract is not independently verified and update template is marked proposed."
+    },
+    {
+      "id": "DISC-005",
+      "spec_ref": "§5.2",
+      "requirement": "Source-level failure is logged and raises system alert; no silent watcher failure",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`orchestrator/worker.py`; `orchestrator/alerts.py`; `audit/alert_manager.py`",
+      "test_and_behavioral_evidence": "`tests/integration/test_worker.py`, `test_alert_manager.py`; AC S1/S2",
+      "gap_or_note": "Alert delivery itself is only safe with configured dev recipient/provider."
+    },
+    {
+      "id": "DOC-001",
+      "spec_ref": "§5.3",
+      "requirement": "Discover all documents on tender detail page, including ZIP contents recursively",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`sources/waho.py`; `acquisition/service.py`; `acquisition/zip.py`",
+      "test_and_behavioral_evidence": "WAHO attachment and ZIP tests; `tests/integration/test_acquisition_service.py`; AC W2",
+      "gap_or_note": "Scope is demonstrated for WAHO adapter and supported archives."
+    },
+    {
+      "id": "DOC-002",
+      "spec_ref": "§5.3",
+      "requirement": "Preserve original name/source URL and store durable local/cloud copy",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`acquisition/service.py`; `storage/interface.py`; `storage/local.py`",
+      "test_and_behavioral_evidence": "acquisition persistence tests; AC W2",
+      "gap_or_note": "Cloud-backed deployment not selected."
+    },
+    {
+      "id": "DOC-003",
+      "spec_ref": "§5.3",
+      "requirement": "Record type, size, language guess, checksum and avoid duplicate refetch",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`db/models/documents.py`; `acquisition/checksums.py`; `processing/languages.py`",
+      "test_and_behavioral_evidence": "`test_acquisition_service.py`; `test_processing_languages.py`; AC W2/W3",
+      "gap_or_note": "Language detection is best-effort and reports confidence/unknown."
+    },
+    {
+      "id": "DOC-004",
+      "spec_ref": "§5.3",
+      "requirement": "One document failure does not block other tender documents; flag missing inputs",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`acquisition/service.py`; `processing/service.py`; coordinator partial outcomes",
+      "test_and_behavioral_evidence": "`TestFailureTolerance`; `test_one_failed_document_does_not_fail_the_run`; AC D3/D5/FH5",
+      "gap_or_note": "Prompt 10 independent report documents per-file failure path."
+    },
+    {
+      "id": "DOC-005",
+      "spec_ref": "§5.4",
+      "requirement": "Native PDF extraction",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`processing/pdf.py::extract_pdf`",
+      "test_and_behavioral_evidence": "`tests/unit/test_processing_pdf.py::TestNativeText`",
+      "gap_or_note": "Extraction suite passed."
+    },
+    {
+      "id": "DOC-006",
+      "spec_ref": "§5.4",
+      "requirement": "Scanned/image PDF OCR; vision model optional only if supported/tested",
+      "disposition": "MANDATORY + optional proposal",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`processing/ocr.py::TesseractOcrEngine`; `processing/pdf.py`; LLM profile capability fields",
+      "test_and_behavioral_evidence": "scanned/mixed PDF tests; AC D2",
+      "gap_or_note": "OCR path exists, but end-to-end scanned non-English WAHO content reflected in verdict is not independently demonstrated; vision path/provider testing remains open."
+    },
+    {
+      "id": "DOC-007",
+      "spec_ref": "§5.4",
+      "requirement": "DOCX extraction preserves paragraphs/tables/order",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`processing/docx.py::extract_docx`; structured representation",
+      "test_and_behavioral_evidence": "`tests/unit/test_processing_docx.py`; AC D1",
+      "gap_or_note": "Unit fixtures prove extraction structure, not all production files."
+    },
+    {
+      "id": "DOC-008",
+      "spec_ref": "§5.4",
+      "requirement": "Preserve/tag multilingual content or translate before AI",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`processing/languages.py`; document bundle representation",
+      "test_and_behavioral_evidence": "language detection tests; WAHO EN/FR/PT parser fixtures",
+      "gap_or_note": "End-to-end verdict behavior across languages is unverified; translation implementation not found."
+    },
+    {
+      "id": "DOC-009",
+      "spec_ref": "§5.4",
+      "requirement": "Preserve table structure for tender requirements",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`processing/representation.py`; PDF/DOCX table extraction",
+      "test_and_behavioral_evidence": "PDF table and DOCX table tests; AC D1",
+      "gap_or_note": "WAHO report records extraction support."
+    },
+    {
+      "id": "DOC-010",
+      "spec_ref": "§5.4",
+      "requirement": "Persist reusable structured bundle and avoid repeat OCR/extraction",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`processing/store.py`; deterministic extraction/bundle keys",
+      "test_and_behavioral_evidence": "`tests/unit/test_processing_store.py`; AC D4",
+      "gap_or_note": "Version/config invalidation is tested."
+    },
+    {
+      "id": "KB-001",
+      "spec_ref": "§5.5, §7",
+      "requirement": "Editable/uploadable structured KB without deployment",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`KnowledgeBaseVersion`; `admin/api.py` KB upload/read/diff routes; `storage`",
+      "test_and_behavioral_evidence": "`test_kb_available_without_login_and_recipient_last_active_guard`; Prompt 16B persistence test",
+      "gap_or_note": "Live KB production content not supplied; UI/API surface exists."
+    },
+    {
+      "id": "KB-002",
+      "spec_ref": "§5.5",
+      "requirement": "Each save creates immutable version, content hash and timestamp; verdict references used version",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`db/models/knowledge.py`; KB Admin service/API; `db/models/verdicts.py`",
+      "test_and_behavioral_evidence": "KB upload/persist tests; verdict engine integration tests",
+      "gap_or_note": "Versioning exists; independent historical-version end-to-end audit is absent with Prompt 14 verification debt."
+    },
+    {
+      "id": "KB-003",
+      "spec_ref": "§5.5",
+      "requirement": "KB has documented sections including company facts, capabilities, projects, qualifications, partners, gaps and pursue/skip profile",
+      "disposition": "MANDATORY",
+      "implementation_status": "BLOCKED BY OPEN DECISION",
+      "implementation_evidence": "KB schema stores versioned opaque content; Appendix A explicitly deferred",
+      "test_and_behavioral_evidence": "Prompt 13 audit found KB-derived triage defaults unavailable",
+      "gap_or_note": "OPEX has not supplied approved capability data/template; no business KB content may be invented."
+    },
+    {
+      "id": "KB-004",
+      "spec_ref": "§5.5",
+      "requirement": "Compare whole KB plus typical bundle against configurable share of context; show warning",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "KB token count and LLM profile context fields; KB Admin DTO includes token budget",
+      "test_and_behavioral_evidence": "Prompt 15 API tests; Admin UI integration test",
+      "gap_or_note": "Warning threshold defaults remain unsettled/config-driven; actual UI state and warning boundary not independently verified."
+    },
+    {
+      "id": "KB-005",
+      "spec_ref": "§5.5, §3, §14 K5",
+      "requirement": "v1 uses whole KB; no embeddings/vector/RAG; retrieval is phase 2",
+      "disposition": "MANDATORY (absence in v1)",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "No vector/retrieval infrastructure in `src`; verdict context service uses versioned KB",
+      "test_and_behavioral_evidence": "Prompt 14 implementation review and repository search",
+      "gap_or_note": "Phase 2 retrieval expressly excluded."
+    },
+    {
+      "id": "AI-001",
+      "spec_ref": "§5.6",
+      "requirement": "Stage A is before Stage B and filters irrelevant tenders before full assessment",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`triage/service.py`; `orchestrator/coordinator.py` stage ordering",
+      "test_and_behavioral_evidence": "`tests/integration/test_orchestrator_pipeline.py`; Prompt 13 independent report",
+      "gap_or_note": "Stage B callback/handoff contract does not implement AI in triage."
+    },
+    {
+      "id": "AI-002",
+      "spec_ref": "§5.6",
+      "requirement": "Triage rules include/exclude keywords, sectors, regions, minimum value, threshold",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`triage/service.py`; `Setting.triage_rules`",
+      "test_and_behavioral_evidence": "Prompt 13 verification matrix",
+      "gap_or_note": "Rule behavior tested; KB-derived defaults are not resolved (KB-003, O5–O7)."
+    },
+    {
+      "id": "AI-003",
+      "spec_ref": "§5.6",
+      "requirement": "Unset targeting values remain open; no invented sectors/regions/value defaults",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "Triage config defaults are unset/open",
+      "test_and_behavioral_evidence": "Prompt 13 blank-default behavioral tests and code search",
+      "gap_or_note": "O5/O6/O7 still open."
+    },
+    {
+      "id": "AI-004",
+      "spec_ref": "§5.6",
+      "requirement": "Triage passes by default when no disqualifying rule matches",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`triage/service.py` rule decision",
+      "test_and_behavioral_evidence": "Prompt 13 critical default-pass test",
+      "gap_or_note": "—"
+    },
+    {
+      "id": "AI-005",
+      "spec_ref": "§5.6",
+      "requirement": "Triage failures are distinct from discard and are durable/visible",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`TriageResult`; coordinator stage/timeline persistence",
+      "test_and_behavioral_evidence": "Prompt 13 exception/failure/timeline tests",
+      "gap_or_note": "—"
+    },
+    {
+      "id": "AI-006",
+      "spec_ref": "§5.6",
+      "requirement": "Stage B only runs on triage PASS",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "coordinator callback/handoff gate",
+      "test_and_behavioral_evidence": "Prompt 13 stage handoff tests",
+      "gap_or_note": "Stage B real production integration remains separately unverified."
+    },
+    {
+      "id": "AI-007",
+      "spec_ref": "§5.6",
+      "requirement": "Stage B builds assessment from tender bundle, complete applicable KB version and assigned verdict role",
+      "disposition": "MANDATORY",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "`verdict/service.py`; `db/models/verdicts.py`, `llm.py`, `knowledge.py`",
+      "test_and_behavioral_evidence": "`tests/integration/test_verdict_engine.py` exists and full suite passed except unrelated parser test",
+      "gap_or_note": "Prompt 14 independent behavioral report is absent."
+    },
+    {
+      "id": "AI-008",
+      "spec_ref": "§5.6, §8.1",
+      "requirement": "Verdict includes background, requirements, deadline and requirement-by-requirement comparison",
+      "disposition": "MANDATORY",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "`verdict/service.py`; strict schema/prompt; `mail/templates.py`",
+      "test_and_behavioral_evidence": "verdict-engine tests; no independent report",
+      "gap_or_note": "Need independent evidence-chain, full response and persisted-state audit."
+    },
+    {
+      "id": "AI-009",
+      "spec_ref": "§5.6",
+      "requirement": "Verdict enum is APPLY / DO NOT APPLY / APPLY WITH CONDITIONS and confidence",
+      "disposition": "MANDATORY",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "verdict schema/model enum in `db/models/verdicts.py`, `verdict/service.py`",
+      "test_and_behavioral_evidence": "verdict-engine tests",
+      "gap_or_note": "Derivability from requirements has not been independently proved."
+    },
+    {
+      "id": "AI-010",
+      "spec_ref": "§5.6 quality rules",
+      "requirement": "Every supported capability claim cites a real KB section or is marked unverified",
+      "disposition": "PROPOSED (quality rule)",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "verdict semantic validation in `verdict/service.py`",
+      "test_and_behavioral_evidence": "unit/integration verdict tests",
+      "gap_or_note": "No independent adversarial citation test report."
+    },
+    {
+      "id": "AI-011",
+      "spec_ref": "§5.6 quality rules",
+      "requirement": "Unsupported negative capability claims use “no evidence on file” language",
+      "disposition": "PROPOSED (quality rule)",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "verdict prompt/semantic validation",
+      "test_and_behavioral_evidence": "verdict tests",
+      "gap_or_note": "Independent evidence-based challenge not completed."
+    },
+    {
+      "id": "AI-012",
+      "spec_ref": "§5.6",
+      "requirement": "Strict structured JSON/schema validation; invalid result retries exactly once then `verdict_failed` + alert",
+      "disposition": "PROPOSED (quality rule)",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "verdict schema/parser/validator; alert hook",
+      "test_and_behavioral_evidence": "`tests/integration/test_verdict_engine.py`",
+      "gap_or_note": "No separate independent Prompt 14 verification; confirm retry count and downstream failure contract."
+    },
+    {
+      "id": "AI-013",
+      "spec_ref": "§5.6",
+      "requirement": "`incomplete_inputs=true` propagates and is visible to the human",
+      "disposition": "MANDATORY",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "bundle, verdict model and formatter fields",
+      "test_and_behavioral_evidence": "verdict/notification tests",
+      "gap_or_note": "End-to-end incomplete-bundle-to-email behavior not independently audited."
+    },
+    {
+      "id": "AI-014",
+      "spec_ref": "§5.6",
+      "requirement": "Oversized bundle policy maps per-document summaries, reduces to verdict, records map/reduce",
+      "disposition": "MANDATORY",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "verdict context assembly and map/reduce path in `verdict/service.py`",
+      "test_and_behavioral_evidence": "verdict-engine tests",
+      "gap_or_note": "No independent oversized fixture/provenance audit."
+    },
+    {
+      "id": "AI-015",
+      "spec_ref": "§5.6",
+      "requirement": "Deadline is UTC plus original timezone; email renders Nigerian time and notice timezone",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`deadline/model.py`, `deadline/service.py`, tender model; `mail/templates.py`",
+      "test_and_behavioral_evidence": "deadline unit/integration tests",
+      "gap_or_note": "Known French WAHO parser case fails; Prompt 12.1 authoritative boundary not fully independently verified."
+    },
+    {
+      "id": "AI-016",
+      "spec_ref": "§5.6",
+      "requirement": "Urgency derives from configurable deadline window, independent of verdict",
+      "disposition": "MANDATORY",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "`Setting.urgency_window_days`; verdict service",
+      "test_and_behavioral_evidence": "verdict tests exist",
+      "gap_or_note": "Boundary matrix not independently verified."
+    },
+    {
+      "id": "AI-017",
+      "spec_ref": "§5.9",
+      "requirement": "Primary/fallback role profiles honor approval policy before any KB-containing call",
+      "disposition": "PROPOSED",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "verdict service profile gate and `LLMProfile.approved_for_company_docs`",
+      "test_and_behavioral_evidence": "verdict tests exist",
+      "gap_or_note": "Exact payload-to-provider boundary and fallback policy require independent adversarial test."
+    },
+    {
+      "id": "AI-018",
+      "spec_ref": "§5.9.6",
+      "requirement": "Monthly budget warning at 80%, pause Stage B at 100%, triage continues/awaiting_budget",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "Settings and LLMCall usage/cost fields; verdict budget guard hook",
+      "test_and_behavioral_evidence": "tests exist in verdict engine",
+      "gap_or_note": "Production monthly accounting/alerts and blocked-state behavior not independently verified."
+    },
+    {
+      "id": "MAIL-001",
+      "spec_ref": "§5.7, §8.1",
+      "requirement": "One new-tender email for every triage-passing tender, including DO NOT APPLY verdict",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`notifications/service.py::NotificationService`; coordinator notification path",
+      "test_and_behavioral_evidence": "notification service/orchestrator tests",
+      "gap_or_note": "No real end-to-end all-source delivery; provider settings not fully configured in environment."
+    },
+    {
+      "id": "MAIL-002",
+      "spec_ref": "§5.7",
+      "requirement": "Provider-aware attachment planner chooses provider fitting all files or uses secure links",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`mail/planner.py`; provider capabilities; `notifications/service.py`",
+      "test_and_behavioral_evidence": "`tests/unit/test_planner.py`; mail link tests; AC N3",
+      "gap_or_note": "Secure archive path is tested separately."
+    },
+    {
+      "id": "MAIL-003",
+      "spec_ref": "§5.7",
+      "requirement": "Every document is either attached or securely linked; exact attached/linked names logged",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "notification planner, archive link signer, NotificationLog snapshots",
+      "test_and_behavioral_evidence": "planner/link/notification tests",
+      "gap_or_note": "Full real tender→provider output and link access not independently demonstrated."
+    },
+    {
+      "id": "MAIL-004",
+      "spec_ref": "§5.7",
+      "requirement": "Links signed, expiring, configurable expiry; document names listed",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`mail/links.py`; `notifications/archive.py`; settings",
+      "test_and_behavioral_evidence": "`tests/unit/test_mail_links.py`; `test_notification_security.py`",
+      "gap_or_note": "Production archive origin/storage choice remains open (O12)."
+    },
+    {
+      "id": "MAIL-005",
+      "spec_ref": "§5.7, §8",
+      "requirement": "Emails have proper sender, plain text and HTML body",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`mail/templates.py`; Sendlib adapter/provider configs",
+      "test_and_behavioral_evidence": "`tests/unit/test_mail_templates.py`; Sendlib adapter tests",
+      "gap_or_note": "Verified template/adaptor behavior, not sender-domain production deliverability."
+    },
+    {
+      "id": "MAIL-006",
+      "spec_ref": "§5.10.1",
+      "requirement": "Separate tender and dev-alert recipient lists with routing fields and validation",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`db/models/recipients.py`; `notifications/admin.py`; `notifications/router.py`; Admin API",
+      "test_and_behavioral_evidence": "`tests/integration/test_seed_and_recipients.py`; Admin API tests",
+      "gap_or_note": "Business recipient data remains operator-supplied/open."
+    },
+    {
+      "id": "MAIL-007",
+      "spec_ref": "§5.10.1",
+      "requirement": "Prevent disabling/deleting last active dev recipient; seed first from env",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`notifications/recipients.py::RecipientGuard`; `config/seed.py`",
+      "test_and_behavioral_evidence": "recipient guard/seed tests; Prompt 15 API tests",
+      "gap_or_note": "Current env has no operator-supplied production recipient."
+    },
+    {
+      "id": "MAIL-008",
+      "spec_ref": "§5.10.1",
+      "requirement": "Store actual recipients at send time; later edits do not rewrite history",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`NotificationLog` recipient snapshot; notification service",
+      "test_and_behavioral_evidence": "`tests/integration/test_notification_service.py`; model persistence tests",
+      "gap_or_note": "—"
+    },
+    {
+      "id": "MAIL-009",
+      "spec_ref": "§5.10.2",
+      "requirement": "Two-to-three provider chain; transient retry/backoff then fallback",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`mail/chain.py`; `notifications/service.py`; `MailProvider` configuration",
+      "test_and_behavioral_evidence": "`tests/unit/test_mail_chain.py` verifies retry/failover",
+      "gap_or_note": "Current environment has no verified live second provider; full real chain not validated."
+    },
+    {
+      "id": "MAIL-010",
+      "spec_ref": "§5.10.2",
+      "requirement": "Permanent provider errors skip to next provider and raise alert",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "provider chain classification + alert hook",
+      "test_and_behavioral_evidence": "`tests/unit/test_mail_chain.py`; alert tests",
+      "gap_or_note": "Live provider outage not invoked."
+    },
+    {
+      "id": "MAIL-011",
+      "spec_ref": "§5.10.2",
+      "requirement": "Every provider attempt persisted; final log identifies delivered provider",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`NotificationAttempt`, `NotificationLog`; notifications service",
+      "test_and_behavioral_evidence": "notification integration tests; Prompt 12 report",
+      "gap_or_note": "—"
+    },
+    {
+      "id": "MAIL-012",
+      "spec_ref": "§5.10.2",
+      "requirement": "Circuit breaker skips provider after configured failures, cooldown, alert; success closes",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`mail/breaker.py`; notifications integration",
+      "test_and_behavioral_evidence": "`tests/unit/test_mail_breaker.py`, mail-chain breaker integration",
+      "gap_or_note": "—"
+    },
+    {
+      "id": "MAIL-013",
+      "spec_ref": "§5.10.2",
+      "requirement": "Dedupe key and outbound header; ambiguous timeout can be `possible_duplicate`",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "notification persistence/idempotency and Sendlib adapter headers",
+      "test_and_behavioral_evidence": "`tests/unit/test_mail_chain.py::TestPossibleDuplicate`; service tests",
+      "gap_or_note": "Provider-specific true acceptance ambiguity cannot be tested without real service."
+    },
+    {
+      "id": "MAIL-014",
+      "spec_ref": "§5.10.2",
+      "requirement": "Whole chain down persists pending_retry, retries on schedule and health banner remains",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "durable notification outbox states; `notifications/banner.py`",
+      "test_and_behavioral_evidence": "notification service and banner tests; health Admin test",
+      "gap_or_note": "Scheduling production dispatcher remains deployment-dependent."
+    },
+    {
+      "id": "MAIL-015",
+      "spec_ref": "§5.10.3",
+      "requirement": "Sendlib adapter uses provider contract without logging credentials and supports response metadata",
+      "disposition": "MANDATORY",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "`mail/sendlib.py::SendlibProvider`",
+      "test_and_behavioral_evidence": "`tests/unit/test_sendlib_adapter.py`; Prompt 12 report",
+      "gap_or_note": "Real credentials/recipient not supplied; no live connectivity or verified sender."
+    },
+    {
+      "id": "MAIL-016",
+      "spec_ref": "§5.10.3",
+      "requirement": "Provider 2/3 and Sendlib tier/sender/domain choices",
+      "disposition": "OPEN DECISION",
+      "implementation_status": "BLOCKED BY OPEN DECISION",
+      "implementation_evidence": "`docs/13-open-decisions.md` O3/O4; config supports provider chain",
+      "test_and_behavioral_evidence": "Sendlib report: no live provider configured",
+      "gap_or_note": "No second/third provider selected; Sendlib sender mailbox consent/tier remain undecided."
+    },
+    {
+      "id": "SAFE-001",
+      "spec_ref": "§5.12",
+      "requirement": "Test Mode default ON; all tender notifications route only to dev list and subject `[TEST]`",
+      "disposition": "PROPOSED",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`notifications/test_mode.py::TestModePolicy`; DB `Setting` default; recipient router",
+      "test_and_behavioral_evidence": "`tests/unit/test_test_mode.py`; notification security and Admin API test-mail tests",
+      "gap_or_note": "Actual running Admin DB reported ON in prior 16C check."
+    },
+    {
+      "id": "SAFE-002",
+      "spec_ref": "§5.12",
+      "requirement": "Turning Test Mode OFF is explicit and audit-logged",
+      "disposition": "PROPOSED",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "Admin settings route + `ConfigChangeLog`; notification settings",
+      "test_and_behavioral_evidence": "`test_settings_write_is_available_without_login_and_test_mode_off_is_audited`",
+      "gap_or_note": "Production remains Test Mode ON; no toggle performed in this audit."
+    },
+    {
+      "id": "SAFE-003",
+      "spec_ref": "§5.12",
+      "requirement": "Test source/provider/email actions are test-only and cannot reach business recipients",
+      "disposition": "PROPOSED",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "Admin dry-run/test routes and notification policy",
+      "test_and_behavioral_evidence": "Prompt 15 API integration tests with fake services",
+      "gap_or_note": "No live provider interaction."
+    },
+    {
+      "id": "SAFE-004",
+      "spec_ref": "§5.9.4, §5.12",
+      "requirement": "Unapproved verdict profile receives placeholder/public-safe KB only",
+      "disposition": "PROPOSED",
+      "implementation_status": "IMPLEMENTED — UNVERIFIED",
+      "implementation_evidence": "`verdict/service.py` data-policy check; profile approval column",
+      "test_and_behavioral_evidence": "verdict tests exist",
+      "gap_or_note": "Independent exact payload boundary verification outstanding."
+    },
+    {
+      "id": "ADM-001",
+      "spec_ref": "§5.11",
+      "requirement": "Health screen shows per-source last success/failure, 7/30 counts, provider chain and stuck queue",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`admin/api.py::admin_health`; static Health renderer",
+      "test_and_behavioral_evidence": "health dashboard tests; live 200 response",
+      "gap_or_note": "Actual `/api/v1/health/dashboard` succeeds; other operational reads show 500 (F16C-01)."
+    },
+    {
+      "id": "ADM-002",
+      "spec_ref": "§5.11",
+      "requirement": "Source screen list/add/edit/enable/disable/dry-run",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "Admin API source endpoints; static UI Sources screen",
+      "test_and_behavioral_evidence": "Admin API + UI-shaped integration tests; 16A route report",
+      "gap_or_note": "Generic adapter coverage remains SRC-004 gap."
+    },
+    {
+      "id": "ADM-003",
+      "spec_ref": "§5.11",
+      "requirement": "Tender list/detail with timeline by correlation ID",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "Admin tender/timeline API; `TimelineService`; UI screen",
+      "test_and_behavioral_evidence": "Prompt 15 timeline test; live `/api/v1/tenders` returns 500",
+      "gap_or_note": "Live tender list unavailable in current runtime; timeline test itself passes isolated DB."
+    },
+    {
+      "id": "ADM-004",
+      "spec_ref": "§5.11",
+      "requirement": "KB screen versioning/diff/token budget",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "KB API; KnowledgeBaseVersion; UI KB screen",
+      "test_and_behavioral_evidence": "Prompt 15 KB and Prompt 16B integration tests",
+      "gap_or_note": "Full UI/runtime test and business KB update changing verdict not proven."
+    },
+    {
+      "id": "ADM-005",
+      "spec_ref": "§5.11",
+      "requirement": "LLM profile/role/test/approval/usage screens",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "API profile/role/usage routes; static LLM screen",
+      "test_and_behavioral_evidence": "mocked profile test and UI integration",
+      "gap_or_note": "No configured production factory; live `/llm/usage` currently 500; test connection may be unavailable without injected factory."
+    },
+    {
+      "id": "ADM-006",
+      "spec_ref": "§5.11",
+      "requirement": "Separate tender and dev recipient management",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "recipient API/admin service/UI",
+      "test_and_behavioral_evidence": "Admin API tests; UI test",
+      "gap_or_note": "Business recipient choices open."
+    },
+    {
+      "id": "ADM-007",
+      "spec_ref": "§5.11",
+      "requirement": "Mail provider chain/capabilities/test/breaker screen",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "Mail provider API and static UI; notification chain model",
+      "test_and_behavioral_evidence": "UI/API config tests; no real provider calls",
+      "gap_or_note": "Live test-provider and chain failover not configured."
+    },
+    {
+      "id": "ADM-008",
+      "spec_ref": "§5.11",
+      "requirement": "Triage & urgency configuration screen",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "API triage/settings; static screen; Setting model",
+      "test_and_behavioral_evidence": "Prompt 16B persistence integration; Prompt 13 tests",
+      "gap_or_note": "KB-derived targeting defaults unresolved."
+    },
+    {
+      "id": "ADM-009",
+      "spec_ref": "§5.11",
+      "requirement": "Settings screen includes Test Mode, alert thresholds, retention",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`/settings` API; static Settings UI; Setting model",
+      "test_and_behavioral_evidence": "settings API test and live GET settings",
+      "gap_or_note": "Verify all fields and worker next-run behavior; some alert/business thresholds open."
+    },
+    {
+      "id": "ADM-010",
+      "spec_ref": "§5.11",
+      "requirement": "Audit screen shows every configuration change without secrets",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "ConfigChangeLog service/API; static Audit screen",
+      "test_and_behavioral_evidence": "API audit/redaction tests; no-login live `/audit` 200",
+      "gap_or_note": "Human actor/roles explicitly deferred by O11; actor is service identity."
+    },
+    {
+      "id": "OBS-001",
+      "spec_ref": "§6.1",
+      "requirement": "Each tender and pipeline run has unique traceable correlation ID across all records",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`core/correlation.py`; tender/run models; coordinator/timeline",
+      "test_and_behavioral_evidence": "timeline and orchestrator integration tests; AC G3/AU1",
+      "gap_or_note": "Prompt13/Prompt10 reports demonstrate correlation propagation."
+    },
+    {
+      "id": "OBS-002",
+      "spec_ref": "§6.1",
+      "requirement": "Each stage stores status plus machine-readable error code, not only final result",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`orchestrator/status.py`; run/timeline models",
+      "test_and_behavioral_evidence": "`tests/integration/test_orchestrator_pipeline.py`; docs/10 verification",
+      "gap_or_note": "—"
+    },
+    {
+      "id": "OBS-003",
+      "spec_ref": "§6.1",
+      "requirement": "Structured logs include timestamp/correlation/source/stage/status/error category",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`logging/structured.py`; worker/coordinator log calls",
+      "test_and_behavioral_evidence": "`tests/unit/test_logging.py`; AC G4",
+      "gap_or_note": "A centralized query UI for all log classes is not provided."
+    },
+    {
+      "id": "OBS-004",
+      "spec_ref": "§6.1",
+      "requirement": "Run history has start/end/counts/errors/failed correlation IDs",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`db/models/runs.py`; coordinator finalization",
+      "test_and_behavioral_evidence": "docs/10 verification; pipeline tests; AC G1",
+      "gap_or_note": "—"
+    },
+    {
+      "id": "OBS-005",
+      "spec_ref": "§5.10.4, §6.1",
+      "requirement": "Alerts are throttled, deduplicated, recoverable, and visible via dev list/health fallback",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`audit/alert_manager.py`; alert delivery/banners",
+      "test_and_behavioral_evidence": "`tests/integration/test_alert_manager.py`; `test_worker.py`",
+      "gap_or_note": "Persisted alert and throttling logic exist; operational delivery requires actual dev recipient/provider (absent in Sendlib report)."
+    },
+    {
+      "id": "OBS-006",
+      "spec_ref": "§6.1",
+      "requirement": "Run history/stage logs/verdicts retained for configured minimum",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "retention setting and data models",
+      "test_and_behavioral_evidence": "tests cover config persistence",
+      "gap_or_note": "Retention enforcement/job and minimum behavior not independently evidenced."
+    },
+    {
+      "id": "SEC-001",
+      "spec_ref": "§6.2",
+      "requirement": "All source/LLM/mail/OAuth secrets encrypted at rest with master key outside DB",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`crypto/secrets.py`; source/LLM/mail encrypted columns",
+      "test_and_behavioral_evidence": "crypto and Admin API adversarial secret tests",
+      "gap_or_note": "Live secret values are absent; tests use synthetic sentinel."
+    },
+    {
+      "id": "SEC-002",
+      "spec_ref": "§6.2",
+      "requirement": "API/UI/logs/errors/audit never expose stored secret values",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "safe DTOs, error handlers, audit changes fields only",
+      "test_and_behavioral_evidence": "Admin API adversarial secret test and UI secret-safety tests",
+      "gap_or_note": "—"
+    },
+    {
+      "id": "SEC-003",
+      "spec_ref": "§6.2",
+      "requirement": "Full prompts/KB/company contents are not logged; data recipients documented before go-live",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "LLMCall metadata-only model; security docs",
+      "test_and_behavioral_evidence": "security/logging tests and docs",
+      "gap_or_note": "Go-live third-party/owner security note is not present as a complete approved artifact."
+    },
+    {
+      "id": "SEC-004",
+      "spec_ref": "§5.11 / current O11",
+      "requirement": "Admin app requires authenticated Admin/Viewer roles",
+      "disposition": "PROPOSED in source v1.1; superseded by current O11 decision",
+      "implementation_status": "NOT APPLICABLE",
+      "implementation_evidence": "`docs/13` O11; no auth module or route gate",
+      "test_and_behavioral_evidence": "Prompt 16C independent report: no-login UI/API verified",
+      "gap_or_note": "Internal/private network assumption remains; this does not authorize public exposure."
+    },
+    {
+      "id": "DATA-001",
+      "spec_ref": "§7",
+      "requirement": "Core entities (Source, Tender, Document, Verdict, KB version, LLM profile/role/call, mail provider/attempt, recipient, alert, run, settings, audit) have persistence mappings/migrations",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "`db/models/*`; migrations `0001`–`0012`",
+      "test_and_behavioral_evidence": "`tests/integration/test_migrations.py`; persistence tests",
+      "gap_or_note": "Reserved AdminUser remains unused; it is not active identity behavior."
+    },
+    {
+      "id": "DATA-002",
+      "spec_ref": "§7",
+      "requirement": "Operational rows retain verdict/provider/recipient/document/deadline provenance fields",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "`db/models/verdicts.py`, `documents.py`, `mail.py`, `deadline.py`",
+      "test_and_behavioral_evidence": "model and integration tests",
+      "gap_or_note": "Prompt14 historical/correlation/KB/profile metadata has not received independent behavioral verification."
+    },
+    {
+      "id": "NFR-001",
+      "spec_ref": "§6",
+      "requirement": "Crashed crawl preserves seen state and next scheduled run proceeds",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "transactional coordinator and dedup persistence",
+      "test_and_behavioral_evidence": "orchestrator crash/retry tests; AC G2/FH1",
+      "gap_or_note": "—"
+    },
+    {
+      "id": "NFR-002",
+      "spec_ref": "§6",
+      "requirement": "Reprocessing does not send duplicate notifications, except flagged ambiguous provider timeout case",
+      "disposition": "MANDATORY",
+      "implementation_status": "VERIFIED",
+      "implementation_evidence": "dedupe/outbox, notification keys, provider chain",
+      "test_and_behavioral_evidence": "mail chain idempotency/possible duplicate tests; AC N4/N5",
+      "gap_or_note": "Full external provider behavior remains inherently not verified."
+    },
+    {
+      "id": "NFR-003",
+      "spec_ref": "§6",
+      "requirement": "Daily digest/dashboard exposes checked/new/verdict/failure health",
+      "disposition": "MANDATORY",
+      "implementation_status": "PARTIAL",
+      "implementation_evidence": "Admin health dashboard aggregation; `audit/health_digest.py`",
+      "test_and_behavioral_evidence": "health/dashboard tests",
+      "gap_or_note": "Actual digest delivery and live dashboard error cases incomplete."
+    },
+    {
+      "id": "NONGOAL-001",
+      "spec_ref": "§3",
+      "requirement": "No application submission automation",
+      "disposition": "NON-GOAL",
+      "implementation_status": "NOT APPLICABLE",
+      "implementation_evidence": "No application submission component found",
+      "test_and_behavioral_evidence": "no submission tests",
+      "gap_or_note": "—"
+    },
+    {
+      "id": "NONGOAL-002",
+      "spec_ref": "§3",
+      "requirement": "v1 has no Slack/Teams/SMS delivery; email only",
+      "disposition": "NON-GOAL",
+      "implementation_status": "NOT APPLICABLE",
+      "implementation_evidence": "Email notification abstraction only",
+      "test_and_behavioral_evidence": "mail tests",
+      "gap_or_note": "Channel expansion is future work."
+    },
+    {
+      "id": "NONGOAL-003",
+      "spec_ref": "§3, §5.5",
+      "requirement": "No embeddings/vector/RAG retrieval in v1",
+      "disposition": "NON-GOAL",
+      "implementation_status": "NOT APPLICABLE",
+      "implementation_evidence": "None found",
+      "test_and_behavioral_evidence": "source search",
+      "gap_or_note": "Phase 2 only."
+    },
+    {
+      "id": "NONGOAL-004",
+      "spec_ref": "§3",
+      "requirement": "No multi-tenant shared-hosting feature in v1",
+      "disposition": "NON-GOAL",
+      "implementation_status": "NOT APPLICABLE",
+      "implementation_evidence": "Single tenant model/config",
+      "test_and_behavioral_evidence": "no multi-tenant tests",
+      "gap_or_note": "—"
+    },
+    {
+      "id": "NONGOAL-005",
+      "spec_ref": "§9",
+      "requirement": "Specific suggested stack/tools are guidance, not mandatory requirements",
+      "disposition": "NON-GOAL/GUIDANCE",
+      "implementation_status": "NOT APPLICABLE",
+      "implementation_evidence": "Python/FastAPI/SQLAlchemy/static JS selected",
+      "test_and_behavioral_evidence": "repository inspection",
+      "gap_or_note": "No compliance finding is made against non-mandatory suggested tools."
+    }
+  ],
+  "acceptance_criteria_source": "source-docs/tender-intelligence-spec-v1.1.md §11",
+  "acceptance_criteria_crosswalk": [
+    {
+      "criterion": "New tender on any active configured source triggers within one crawl cycle",
+      "trace_ids": [
+        "SRC-002",
+        "DISC-001",
+        "DISC-003",
+        "MAIL-001"
+      ],
+      "status": "PARTIAL"
+    },
+    {
+      "criterion": "Email contains three sections and attachment/link footer",
+      "trace_ids": [
+        "AI-008",
+        "MAIL-002",
+        "MAIL-003",
+        "MAIL-005"
+      ],
+      "status": "PARTIAL"
+    },
+    {
+      "criterion": "All tender documents attached or reliably linked",
+      "trace_ids": [
+        "DOC-001",
+        "DOC-004",
+        "MAIL-002",
+        "MAIL-004"
+      ],
+      "status": "PARTIAL"
+    },
+    {
+      "criterion": "No duplicate notifications except logged ambiguous timeout",
+      "trace_ids": [
+        "DISC-003",
+        "MAIL-013",
+        "NFR-002"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "criterion": "Source added/disabled/rescheduled without deployment",
+      "trace_ids": [
+        "SRC-002",
+        "DISC-001"
+      ],
+      "status": "PARTIAL"
+    },
+    {
+      "criterion": "KB update changes subsequent verdict and version is recorded",
+      "trace_ids": [
+        "KB-002",
+        "AI-007"
+      ],
+      "status": "IMPLEMENTED — UNVERIFIED"
+    },
+    {
+      "criterion": "Scanned non-English PDF is reflected in verdict",
+      "trace_ids": [
+        "DOC-006",
+        "DOC-008",
+        "AI-008"
+      ],
+      "status": "PARTIAL"
+    },
+    {
+      "criterion": "Source outage alerts without repeated-alert spam",
+      "trace_ids": [
+        "DISC-005",
+        "OBS-005"
+      ],
+      "status": "PARTIAL"
+    },
+    {
+      "criterion": "Journey reconstructable via correlation ID under one minute",
+      "trace_ids": [
+        "OBS-001",
+        "OBS-002",
+        "OBS-004",
+        "DATA-002"
+      ],
+      "status": "PARTIAL"
+    },
+    {
+      "criterion": "Health view shows per-source success/failure",
+      "trace_ids": [
+        "ADM-001",
+        "NFR-003"
+      ],
+      "status": "PARTIAL"
+    },
+    {
+      "criterion": "Changed LLM profile is used on next call without redeploy",
+      "trace_ids": [
+        "ADM-005",
+        "ARC-003"
+      ],
+      "status": "PARTIAL"
+    },
+    {
+      "criterion": "Unapproved primary/fallback never receives company KB",
+      "trace_ids": [
+        "AI-017",
+        "SAFE-004"
+      ],
+      "status": "IMPLEMENTED — UNVERIFIED"
+    },
+    {
+      "criterion": "Recipient edits, last dev recipient guard, send-time recipient snapshot",
+      "trace_ids": [
+        "MAIL-006",
+        "MAIL-007",
+        "MAIL-008"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "criterion": "Provider failover and provider attempt log",
+      "trace_ids": [
+        "MAIL-009",
+        "MAIL-010",
+        "MAIL-011"
+      ],
+      "status": "PARTIAL"
+    },
+    {
+      "criterion": "Provider limits produce working expiring links",
+      "trace_ids": [
+        "MAIL-002",
+        "MAIL-004"
+      ],
+      "status": "PARTIAL"
+    },
+    {
+      "criterion": "Test Mode blocks business recipients and adds [TEST]",
+      "trace_ids": [
+        "SAFE-001",
+        "SAFE-003"
+      ],
+      "status": "VERIFIED"
+    },
+    {
+      "criterion": "All-provider outage persists retry and health banner",
+      "trace_ids": [
+        "MAIL-014",
+        "OBS-005"
+      ],
+      "status": "PARTIAL"
+    }
+  ],
+  "gaps": [
+    {
+      "id": "GAP-001",
+      "trace_ids": [
+        "SRC-004",
+        "SRC-005",
+        "SRC-006",
+        "SRC-007",
+        "DISC-001"
+      ],
+      "summary": "Generic source configuration/extensibility is incomplete; filtered and search-driven examples are absent.",
+      "evidence": "demo-evidence/source-extensibility-audit.md"
+    },
+    {
+      "id": "GAP-002",
+      "trace_ids": [
+        "KB-003",
+        "AI-002"
+      ],
+      "summary": "Canonical KB content/template is absent, so KB-derived triage defaults are unavailable.",
+      "evidence": "demo-evidence/prompt-13-verification-report.md"
+    },
+    {
+      "id": "GAP-003",
+      "trace_ids": [
+        "AI-007",
+        "AI-018",
+        "DATA-002"
+      ],
+      "summary": "No independent Prompt 14 behavioral verification report exists; verdict requirement claims are not independently verified."
+    },
+    {
+      "id": "GAP-004",
+      "trace_ids": [
+        "MAIL-009",
+        "MAIL-015",
+        "MAIL-016",
+        "OPEN-001",
+        "OPEN-002",
+        "OPEN-012"
+      ],
+      "summary": "Live Sendlib sender/tier and second/third providers are not confirmed or configured.",
+      "evidence": "demo-evidence/sendlib-config-report.md"
+    },
+    {
+      "id": "GAP-005",
+      "trace_ids": [
+        "DOC-006",
+        "DOC-008"
+      ],
+      "summary": "Scanned multilingual extraction is not proven end-to-end through verdict generation."
+    },
+    {
+      "id": "GAP-006",
+      "trace_ids": [
+        "OBS-005",
+        "OBS-006",
+        "NFR-003"
+      ],
+      "summary": "Production alert delivery, retention enforcement, and daily digest remain unverified."
+    },
+    {
+      "id": "GAP-007",
+      "trace_ids": [
+        "ADM-001",
+        "ADM-003",
+        "ADM-005"
+      ],
+      "summary": "Live /api/v1/tenders and /api/v1/llm/usage returned generic 500 in the last independent 16C run; 403 copy retains deferred role wording.",
+      "evidence": "demo-evidence/prompt-16c-verification-report.md"
+    },
+    {
+      "id": "GAP-008",
+      "trace_ids": [
+        "AI-015"
+      ],
+      "summary": "Known French WAHO deadline fixture fails parsing.",
+      "evidence": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt"
+    },
+    {
+      "id": "GAP-009",
+      "trace_ids": [
+        "ADM-007",
+        "MAIL-003",
+        "MAIL-009"
+      ],
+      "summary": "No integrated deployed-provider test covers capability selection, attached-vs-linked payload, and failover together."
+    },
+    {
+      "id": "GAP-010",
+      "trace_ids": [
+        "SEC-003"
+      ],
+      "summary": "Go-live third-party data-sharing inventory with named owners is incomplete."
+    }
+  ],
+  "known_test_failure": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt",
+  "test_baseline": {
+    "focused_admin": {
+      "command": ".venv\\Scripts\\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16c-independent tests/integration/test_admin_api_prompt15.py tests/integration/test_admin_ui_api_prompt16b.py tests/integration/test_admin_api.py tests/ui",
+      "passed": 20,
+      "failed": 0
+    },
+    "ui_node": {
+      "command": "node --test tests/ui/*.test.mjs",
+      "passed": 26,
+      "failed": 0
+    },
+    "worker_services": {
+      "command": ".venv\\Scripts\\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16c-worker tests/integration/test_worker.py tests/integration/test_orchestrator_pipeline.py tests/integration/test_notification_service.py tests/integration/test_audit_security.py",
+      "passed": 54,
+      "failed": 0
+    },
+    "full_suite": {
+      "command": ".venv\\Scripts\\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16c-independent-full",
+      "passed": 618,
+      "failed": 1,
+      "failure": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt"
+    }
+  },
+  "previous_independent_verification_status": {
+    "prompt_13": "NEEDS FIXES",
+    "prompt_14": "implementation report exists; independent verification artifact absent",
+    "prompt_15": "NEEDS FIXES in existing verification report",
+    "prompt_16a": "NEEDS FIXES / verification incomplete",
+    "prompt_16b": "NEEDS FIXES",
+    "prompt_16c": "NEEDS FIXES"
+  },
+  "gate": "REQUIREMENTS TRACEABILITY AUDIT: COMPLETE — MANDATORY REQUIREMENTS NOT ALL VERIFIED",
+  "next_action": "Plan remediation from GAP-001 after resolving business-open inputs; independently verify Prompt 14 before marking its requirements verified. Do not start Prompt 17 on the strength of this audit."
+}

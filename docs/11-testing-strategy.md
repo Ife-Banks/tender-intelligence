@@ -39,7 +39,7 @@
 - "Test this source", "Test connection", "Send test email" produce no operational writes and no business sends.
 
 ### Security tests
-- Secrets-blocking: no secret value in any log line; API responses omit secret values; secrets never in `ConfigChangeLog`; unapproved-provider refusal (primary & fallback); viewer role blocked from KB and secrets; signed links expire; master key not in repo.
+- Secrets-blocking: no secret value in any log line; API responses omit secret values; secrets never in `ConfigChangeLog`; unapproved-provider refusal (primary & fallback); signed links expire; master key not in repo. Application login and Viewer-role checks are deferred by O11.
 
 ### End-to-end tests
 - WAHO fixture → detect new → fetch → extract → triage pass → verdict → formatted email (Test Mode, dev recipient) → notification log. A second run produces no duplicate. A KB version change flips a "no evidence on file for GS1 lead" gap to a match (v1.1 §11).

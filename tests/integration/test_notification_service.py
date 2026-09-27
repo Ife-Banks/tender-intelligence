@@ -41,6 +41,11 @@ from tender_intelligence.mail.chain import MailRetryPolicy
 from tender_intelligence.mail.links import SecureLinkSigner
 from tender_intelligence.notifications.admin import RecipientAdmin, RecipientAdminError
 from tender_intelligence.notifications.banner import RED_BANNER_TYPE
+from tender_intelligence.notifications.channels import (
+    EmailNotificationChannel,
+    NotificationDispatcher,
+)
+from tender_intelligence.notifications.contracts import NotificationEvent
 from tender_intelligence.notifications.service import (
     NotificationError,
     NotificationSafetyError,
@@ -262,6 +267,40 @@ def world(session_factory_gr, tmp_path):
 
 
 class TestTestModeDelivery:
+    def test_generic_channel_sends_email_and_preserves_attachments_test_mode_and_audit(
+        self, world
+    ) -> None:
+        world.add_dev("dev@opex.example")
+        _, tender, documents, verdict = world.seed_tender()
+        world.add_provider(name="sendlib-channel")
+        handler = _Handler(200)
+        email_service = world.service(handler)
+        dispatcher = NotificationDispatcher(EmailNotificationChannel(email_service))
+
+        outcome = dispatcher.send(
+            NotificationEvent(
+                tender_id=tender.id,
+                verdict_id=verdict.id,
+                correlation_id=tender.correlation_id,
+            )
+        )
+
+        assert dispatcher.channel_name == "email"
+        assert outcome.status == "sent"
+        payload = json.loads(handler.requests[0].content)
+        assert payload["to"] == ["dev@opex.example"]
+        assert payload["subject"].startswith("[TEST] ")
+        assert len(payload["attachments"]) == 1
+        assert payload["attachments"][0]["filename"] == documents[0].filename
+        assert payload["text"]
+        assert payload["html"]
+        with world.session_factory() as session:
+            log = session.get(NotificationLog, outcome.notification_log_id)
+            assert log is not None and log.status == "sent"
+            assert log.tender_id == tender.id and log.verdict_id == verdict.id
+            assert log.attachments[0]["document_id"] == documents[0].id
+            assert log.correlation_id == tender.correlation_id
+
     def test_admin_test_email_uses_chain_and_creates_non_tender_attempt(self, world) -> None:
         world.add_dev("dev-test@opex.example")
         world.add_business("business@acme.example")
@@ -368,7 +407,9 @@ class TestTestModeDelivery:
         handler = _Handler(200)
         service = world.service(handler)
 
-        outcome = service.notify_tender(tender.id)
+        outcome = NotificationDispatcher(EmailNotificationChannel(service)).send(
+            NotificationEvent(tender_id=tender.id, verdict_id=verdict.id)
+        )
 
         assert outcome.status == "sent"
         small, big = doc_rows
@@ -613,7 +654,9 @@ class TestPossibleDuplicate:
             handler, retry_policy=MailRetryPolicy(attempts=2, backoff_base_seconds=1.0)
         )
 
-        outcome = service.notify_tender(tender.id)
+        outcome = NotificationDispatcher(EmailNotificationChannel(service)).send(
+            NotificationEvent(tender_id=tender.id, verdict_id=verdict.id)
+        )
 
         assert outcome.status == "sent"
         assert outcome.possible_duplicate
@@ -823,7 +866,10 @@ class TestFinalSafetyBoundaries:
         world.add_provider(name="sendlib-one")
         first_handler = _Handler(503)
         first_service = world.service(first_handler)
-        assert first_service.notify_tender(tender.id, verdict.id).status == "pending_retry"
+        first_channel = NotificationDispatcher(EmailNotificationChannel(first_service))
+        assert first_channel.send(
+            NotificationEvent(tender_id=tender.id, verdict_id=verdict.id)
+        ).status == "pending_retry"
 
         second_handler = _Handler(200)
         second_service = world.service(second_handler)

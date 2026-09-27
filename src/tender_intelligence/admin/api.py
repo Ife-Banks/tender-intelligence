@@ -1,4 +1,4 @@
-"""Versioned, authenticated Admin API over the shared Prompt 04–14 models/services.
+"""Internal Admin API over the shared Prompt 04–14 models/services.
 
 Handlers serialize explicit safe DTOs and never return ORM instances. Operational writes
 remain owned by the worker; this module only mutates configuration or reads persisted state.
@@ -7,24 +7,25 @@ remain owned by the worker; this module only mutates configuration or reads pers
 from __future__ import annotations
 
 import base64
+import copy
 import difflib
 import hashlib
 import json
 import re
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from tender_intelligence.admin.auth import AdminActor, CurrentActor
 from tender_intelligence.audit.timeline import TimelineService
 from tender_intelligence.config.settings import get_env_settings
 from tender_intelligence.core.correlation import new_correlation_id
@@ -48,12 +49,15 @@ from tender_intelligence.db.models import (
 )
 from tender_intelligence.db.models.recipients import is_valid_email
 from tender_intelligence.db.repositories.notifications import MailProviderRepository
+from tender_intelligence.logging.structured import get_logger
 from tender_intelligence.notifications.recipients import RecipientGuard
 from tender_intelligence.notifications.test_mode import TestModePolicy
 from tender_intelligence.orchestrator.registry import AdapterRegistry
 from tender_intelligence.storage.local import LocalFileSystemStorage
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
+logger = get_logger("tender_intelligence.admin.api")
+ADMIN_API_AUDIT_ACTOR = "internal-admin-api"
 
 
 class StrictModel(BaseModel):
@@ -127,15 +131,25 @@ class TriageWrite(StrictModel):
 
 class LLMProfileWrite(StrictModel):
     name: str = Field(min_length=1, max_length=255)
+    provider_name: str | None = Field(default=None, max_length=255)
+    protocol: str = Field(default="openai_compatible", min_length=1, max_length=32)
     base_url: str = Field(min_length=8, max_length=1024)
     model: str = Field(min_length=1, max_length=255)
     api_key: str | None = Field(default=None, min_length=1)
     context_window_tokens: int = Field(default=8000, gt=0)
     max_output_tokens: int | None = Field(default=None, gt=0)
     temperature: float | None = Field(default=None, ge=0, le=2)
+    top_p: float | None = Field(default=None, ge=0, le=1)
+    reasoning_budget: int | None = Field(default=None, gt=0)
+    enable_thinking: bool = False
     timeout_seconds: int = Field(default=60, gt=0, le=600)
     supports_json: bool = True
     supports_vision: bool = False
+    supports_response_format: bool = True
+    supports_include_reasoning: bool = False
+    supports_chat_template_kwargs: bool = False
+    supports_reasoning_effort: bool = False
+    reasoning_effort: str | None = Field(default=None, max_length=32)
     cost_per_1k_input: float | None = Field(default=None, ge=0)
     cost_per_1k_output: float | None = Field(default=None, ge=0)
     approved_for_company_docs: bool = False
@@ -199,6 +213,12 @@ class KBWrite(StrictModel):
     filename: str = Field(min_length=1, max_length=255)
     content_base64: str = Field(min_length=1)
     note: str | None = Field(default=None, max_length=2000)
+    document_type: str | None = Field(default=None, max_length=100)
+    date: str | None = Field(default=None, max_length=32)
+    tags: list[str] = Field(default_factory=list, max_length=100)
+    summary: str | None = Field(default=None, max_length=4000)
+    source: str | None = Field(default=None, max_length=1000)
+    structured_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class TestEmailWrite(StrictModel):
@@ -238,13 +258,16 @@ def _session(request: Request, session: Session | None) -> Session:
 
 def _commit_audit(
     session: Session,
-    actor: CurrentActor,
     entity: str,
     entity_id: int | None,
     fields: dict[str, Any],
 ) -> None:
     log_config_change(
-        session, actor=actor.identity, entity=entity, entity_id=entity_id, changed_fields=fields
+        session,
+        actor=ADMIN_API_AUDIT_ACTOR,
+        entity=entity,
+        entity_id=entity_id,
+        changed_fields=fields,
     )
 
 
@@ -252,8 +275,8 @@ def _not_found(resource: str) -> HTTPException:
     return HTTPException(404, detail={"code": "not_found", "resource": resource})
 
 
-def _source(row: Source) -> dict[str, Any]:
-    return {
+def _source(row: Source, session: Session | None = None) -> dict[str, Any]:
+    result = {
         "id": row.id,
         "name": row.name,
         "source_type": row.source_type,
@@ -270,6 +293,44 @@ def _source(row: Source) -> dict[str, Any]:
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
     }
+    if session is not None:
+        latest_success = session.scalar(
+            select(RunHistory.ended_at)
+            .where(
+                RunHistory.source_id == row.id,
+                RunHistory.ended_at.is_not(None),
+                RunHistory.error_count == 0,
+                RunHistory.failed_stage.is_(None),
+            )
+            .order_by(RunHistory.started_at.desc())
+            .limit(1)
+        )
+        latest_failure = session.scalar(
+            select(RunHistory.ended_at)
+            .where(
+                RunHistory.source_id == row.id,
+                RunHistory.ended_at.is_not(None),
+                or_(RunHistory.error_count > 0, RunHistory.failed_stage.is_not(None)),
+            )
+            .order_by(RunHistory.started_at.desc())
+            .limit(1)
+        )
+        frequency = row.crawl_frequency_minutes
+        if not row.active:
+            next_run = None
+        elif row.last_run_at is None or not frequency:
+            next_run = datetime.now(UTC)
+        else:
+            last_run = row.last_run_at
+            if last_run.tzinfo is None:
+                last_run = last_run.replace(tzinfo=UTC)
+            next_run = last_run + timedelta(minutes=int(frequency))
+        result.update(
+            last_successful_run=_iso(latest_success),
+            last_failed_run=_iso(latest_failure),
+            next_run_at=_iso(next_run),
+        )
+    return result
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -359,17 +420,27 @@ def _profile(row: LLMProfile) -> dict[str, Any]:
     return {
         "id": row.id,
         "name": row.name,
+        "provider_name": row.provider_name,
+        "protocol": row.protocol,
         "base_url": _safe_tree(row.base_url),
         "model": row.model,
         "api_key_configured": bool(row.api_key_encrypted),
         "context_window_tokens": row.context_window_tokens,
         "max_output_tokens": row.max_output_tokens,
         "temperature": row.temperature,
+        "top_p": row.top_p,
+        "reasoning_budget": row.reasoning_budget,
+        "enable_thinking": row.enable_thinking,
         "timeout_seconds": row.timeout_seconds,
         "extra_headers_configured": bool(row.extra_headers),
         "extra_header_names": sorted((row.extra_headers or {}).keys()),
         "supports_json": row.supports_json,
         "supports_vision": row.supports_vision,
+        "supports_response_format": row.supports_response_format,
+        "supports_include_reasoning": row.supports_include_reasoning,
+        "supports_chat_template_kwargs": row.supports_chat_template_kwargs,
+        "supports_reasoning_effort": row.supports_reasoning_effort,
+        "reasoning_effort": row.reasoning_effort,
         "cost_per_1k_input": row.cost_per_1k_input,
         "cost_per_1k_output": row.cost_per_1k_output,
         "approved_for_company_docs": row.approved_for_company_docs,
@@ -438,14 +509,13 @@ def _safe_profile_exists(session: Session, profile_id: int | None) -> LLMProfile
 
 
 @router.get("/sources/supported-types")
-def source_types(request: Request, actor: CurrentActor):
+def source_types(request: Request):
     return {"items": list(_source_types(request))}
 
 
 @router.get("/sources")
 def list_sources(
     request: Request,
-    actor: CurrentActor,
     session: Session = SessionDep,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -453,14 +523,14 @@ def list_sources(
     rows = session.scalars(select(Source).order_by(Source.id).offset(offset).limit(limit)).all()
     total = session.scalar(select(func.count()).select_from(Source)) or 0
     return {
-        "items": [_source(row) for row in rows],
+        "items": [_source(row, session) for row in rows],
         "pagination": {"offset": offset, "limit": limit, "total": total},
     }
 
 
 @router.post("/sources", status_code=201)
 def create_source(
-    payload: SourceWrite, request: Request, actor: AdminActor, session: Session = SessionDep
+    payload: SourceWrite, request: Request, session: Session = SessionDep
 ):
     _require_supported_source(request, payload.source_type)
     values = payload.model_dump(exclude={"auth"})
@@ -475,7 +545,6 @@ def create_source(
         raise HTTPException(409, detail={"code": "source_name_conflict"}) from exc
     _commit_audit(
         session,
-        actor,
         "Source",
         row.id,
         {
@@ -485,15 +554,15 @@ def create_source(
             "auth_configured": bool(payload.auth),
         },
     )
-    return _source(row)
+    return _source(row, session)
 
 
 @router.get("/sources/{source_id}")
-def get_source(source_id: int, actor: CurrentActor, session: Session = SessionDep):
+def get_source(source_id: int, session: Session = SessionDep):
     row = session.get(Source, source_id)
     if row is None:
         raise _not_found("source")
-    return _source(row)
+    return _source(row, session)
 
 
 @router.put("/sources/{source_id}")
@@ -501,7 +570,6 @@ def update_source(
     source_id: int,
     payload: SourceWrite,
     request: Request,
-    actor: AdminActor,
     session: Session = SessionDep,
 ):
     row = session.get(Source, source_id)
@@ -520,7 +588,6 @@ def update_source(
         raise HTTPException(409, detail={"code": "source_name_conflict"}) from exc
     _commit_audit(
         session,
-        actor,
         "Source",
         row.id,
         {
@@ -528,24 +595,24 @@ def update_source(
             "auth_configured": payload.auth is not None,
         },
     )
-    return _source(row)
+    return _source(row, session)
 
 
 @router.patch("/sources/{source_id}/active")
 def set_source_active(
-    source_id: int, payload: ActiveWrite, actor: AdminActor, session: Session = SessionDep
+    source_id: int, payload: ActiveWrite, session: Session = SessionDep
 ):
     row = session.get(Source, source_id)
     if row is None:
         raise _not_found("source")
     row.active = payload.active
     session.flush()
-    _commit_audit(session, actor, "Source", row.id, {"active": row.active})
-    return _source(row)
+    _commit_audit(session, "Source", row.id, {"active": row.active})
+    return _source(row, session)
 
 
 @router.post("/sources/{source_id}/test")
-def test_source(source_id: int, request: Request, actor: AdminActor, session: Session = SessionDep):
+def test_source(source_id: int, request: Request, session: Session = SessionDep):
     row = session.get(Source, source_id)
     if row is None:
         raise _not_found("source")
@@ -587,9 +654,239 @@ def test_source(source_id: int, request: Request, actor: AdminActor, session: Se
     }
 
 
+def _record_operation(app: Any, correlation_id: str, result: dict[str, Any]) -> None:
+    operations = app.state.operations
+    operations[correlation_id].update(result)
+    while len(operations) > 100:
+        operations.pop(next(iter(operations)))
+
+
+def _operation_lock(request: Request, source_id: int) -> threading.Lock:
+    return request.app.state.source_run_locks.setdefault(source_id, threading.Lock())
+
+
+def _operation_progress(app: Any, correlation_id: str):
+    def update(outcome):
+        current = app.state.operations.get(correlation_id)
+        if current is None:
+            return
+        stages = dict(current.get("stages") or {})
+        stages[outcome.stage.value] = {
+            "status": str(outcome.status),
+            "detail": outcome.detail,
+            "error_code": outcome.error_code,
+        }
+        current.update(status="RUNNING", current_stage=outcome.stage.value, stages=stages)
+    return update
+
+
+def _finish_manual_operation(
+    app: Any,
+    *,
+    correlation_id: str,
+    entity: str,
+    entity_id: int,
+    result: dict[str, Any],
+    lock: threading.Lock,
+) -> None:
+    try:
+        _record_operation(app, correlation_id, result)
+        maker = app.state.session_factory
+        with maker() as session:
+            _commit_audit(
+                session,
+                "ManualOperation",
+                entity_id,
+                {
+                    "entity": entity,
+                    "correlation_id": correlation_id,
+                    "run_history_id": result.get("run_history_id"),
+                    "status": result.get("status"),
+                    "trigger": result.get("trigger"),
+                    "error_code": result.get("error_code"),
+                },
+            )
+            session.commit()
+    finally:
+        lock.release()
+
+
+def _run_source_operation(
+    app: Any, source_id: int, correlation_id: str, lock: threading.Lock
+) -> None:
+    _record_operation(app, correlation_id, {"status": "RUNNING"})
+    try:
+        report = app.state.run_coordinator.run_source(
+            source_id,
+            trigger="manual_source",
+            correlation_id=correlation_id,
+            progress_callback=_operation_progress(app, correlation_id),
+        )
+        result = {
+            "status": str(report.status),
+            "trigger": "manual_source",
+            "source_id": source_id,
+            "run_history_id": report.run_history_id,
+            "stages": report.stage_map(),
+            "error_code": report.error_code,
+            "tenders_considered": report.tenders_considered,
+            "documents_acquired": report.documents_acquired,
+            "documents_processed": report.documents_processed,
+        }
+    except Exception as exc:  # noqa: BLE001 - API responses and audit remain secret-safe
+        result = {
+            "status": "FAILED",
+            "trigger": "manual_source",
+            "source_id": source_id,
+            "error_code": _safe_error_code(getattr(exc, "error_code", None), "source_run_failed"),
+        }
+    _finish_manual_operation(
+        app, correlation_id=correlation_id, entity="source", entity_id=source_id,
+        result=result, lock=lock,
+    )
+
+
+def _run_tender_operation(
+    app: Any, tender_id: int, source_id: int, correlation_id: str, lock: threading.Lock
+) -> None:
+    _record_operation(app, correlation_id, {"status": "RUNNING"})
+    try:
+        report = app.state.run_coordinator.run_existing_tender(
+            tender_id,
+            correlation_id=correlation_id,
+            progress_callback=_operation_progress(app, correlation_id),
+        )
+        result = {
+            "status": str(report.status),
+            "trigger": "manual_tender",
+            "tender_id": tender_id,
+            "source_id": source_id,
+            "run_history_id": report.run_history_id,
+            "stages": report.stage_map(),
+            "error_code": report.error_code,
+        }
+    except Exception as exc:  # noqa: BLE001 - never disclose raw provider/source errors
+        result = {
+            "status": "FAILED",
+            "trigger": "manual_tender",
+            "tender_id": tender_id,
+            "source_id": source_id,
+            "error_code": _safe_error_code(
+                getattr(exc, "error_code", None), "tender_process_failed"
+            ),
+        }
+    _finish_manual_operation(
+        app, correlation_id=correlation_id, entity="tender", entity_id=tender_id,
+        result=result, lock=lock,
+    )
+
+
+@router.post("/sources/{source_id}/run", status_code=202)
+def run_source_now(
+    source_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    session: Session = SessionDep,
+):
+    source = session.get(Source, source_id)
+    if source is None:
+        raise _not_found("source")
+    if not source.active:
+        raise HTTPException(409, detail={"code": "inactive_source"})
+    setting = session.get(Setting, 1)
+    if setting is None or not setting.test_mode:
+        raise HTTPException(409, detail={"code": "test_mode_required"})
+    coordinator = getattr(request.app.state, "run_coordinator", None)
+    if coordinator is None:
+        raise HTTPException(503, detail={"code": "source_run_unavailable"})
+    lock = _operation_lock(request, source_id)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(409, detail={"code": "source_run_in_progress"})
+    correlation_id = new_correlation_id()
+    request.app.state.operations[correlation_id] = {
+        "correlation_id": correlation_id,
+        "status": "QUEUED",
+        "trigger": "manual_source",
+        "source_id": source_id,
+    }
+    _commit_audit(session, "ManualOperation", source_id, {
+        "entity": "source", "operation": "Run Now", "trigger": "manual_source",
+        "correlation_id": correlation_id, "test_mode": True, "status": "QUEUED",
+    })
+    session.commit()
+    background_tasks.add_task(_run_source_operation, request.app, source_id, correlation_id, lock)
+    return {"correlation_id": correlation_id, "trigger": "manual_source", "status": "QUEUED"}
+
+
+@router.post("/tenders/{tender_id}/process", status_code=202)
+def process_existing_tender(
+    tender_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    session: Session = SessionDep,
+):
+    tender = session.get(Tender, tender_id)
+    if tender is None:
+        raise _not_found("tender")
+    setting = session.get(Setting, 1)
+    if setting is None or not setting.test_mode:
+        raise HTTPException(409, detail={"code": "test_mode_required"})
+    coordinator = getattr(request.app.state, "run_coordinator", None)
+    if coordinator is None:
+        raise HTTPException(503, detail={"code": "tender_process_unavailable"})
+    source_id = int(tender.source_id)
+    lock = _operation_lock(request, source_id)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(409, detail={"code": "source_run_in_progress"})
+    correlation_id = new_correlation_id()
+    request.app.state.operations[correlation_id] = {
+        "correlation_id": correlation_id,
+        "status": "QUEUED",
+        "trigger": "manual_tender",
+        "source_id": source_id,
+        "tender_id": tender_id,
+    }
+    _commit_audit(session, "ManualOperation", tender_id, {
+        "entity": "tender", "operation": "Process Now", "trigger": "manual_tender",
+        "correlation_id": correlation_id, "test_mode": True, "status": "QUEUED",
+    })
+    session.commit()
+    background_tasks.add_task(
+        _run_tender_operation, request.app, tender_id, source_id, correlation_id, lock
+    )
+    return {"correlation_id": correlation_id, "trigger": "manual_tender", "status": "QUEUED"}
+
+
+@router.get("/operations/{correlation_id}")
+def get_operation(correlation_id: str, request: Request, session: Session = SessionDep):
+    operation = getattr(request.app.state, "operations", {}).get(correlation_id)
+    if operation is not None:
+        return dict(operation)
+    row = session.scalar(select(RunHistory).where(RunHistory.correlation_id == correlation_id))
+    if row is None:
+        raise _not_found("operation")
+    if row.ended_at is None:
+        status = "RUNNING"
+    elif row.error_count or row.failed_stage:
+        status = "FAILED"
+    elif any(str(value) == "PARTIAL" for value in (row.stages or {}).values()):
+        status = "PARTIAL"
+    else:
+        status = "COMPLETED"
+    return {
+        "correlation_id": correlation_id,
+        "status": status,
+        "trigger": row.trigger,
+        "source_id": row.source_id,
+        "tender_id": row.tender_id,
+        "run_history_id": row.id,
+        "stages": row.stages or {},
+        "error_code": row.error_code,
+    }
+
+
 @router.get("/tenders")
 def list_tenders(
-    actor: CurrentActor,
     session: Session = SessionDep,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -615,13 +912,13 @@ def list_tenders(
     total = session.scalar(count_query) or 0
     return {
         "items": [
-            _tender_view(session, row, include_private=actor.role == "admin") for row in rows
+            _tender_view(session, row) for row in rows
         ],
         "pagination": {"offset": offset, "limit": limit, "total": total},
     }
 
 
-def _tender_view(session: Session, row: Tender, *, include_private: bool) -> dict[str, Any]:
+def _tender_view(session: Session, row: Tender) -> dict[str, Any]:
     deadline = row.deadline_resolution
     verdict = session.scalar(
         select(Verdict).where(Verdict.tender_id == row.id).order_by(Verdict.generated_at.desc())
@@ -653,20 +950,20 @@ def _tender_view(session: Session, row: Tender, *, include_private: bool) -> dic
             if verdict
             else None
         ),
-        "notice": _safe_tree(row.raw_metadata) if include_private else None,
+        "notice": _safe_tree(row.raw_metadata),
     }
 
 
 @router.get("/tenders/{tender_id}")
-def get_tender(tender_id: int, actor: CurrentActor, session: Session = SessionDep):
+def get_tender(tender_id: int, session: Session = SessionDep):
     row = session.get(Tender, tender_id)
     if row is None:
         raise _not_found("tender")
-    return _tender_view(session, row, include_private=actor.role == "admin")
+    return _tender_view(session, row)
 
 
 @router.get("/tenders/{tender_id}/timeline")
-def get_timeline(tender_id: int, actor: CurrentActor, session: Session = SessionDep):
+def get_timeline(tender_id: int, session: Session = SessionDep):
     row = session.get(Tender, tender_id)
     if row is None:
         raise _not_found("tender")
@@ -697,7 +994,7 @@ def get_timeline(tender_id: int, actor: CurrentActor, session: Session = Session
 
 
 @router.get("/tenders/{tender_id}/verdicts")
-def list_tender_verdicts(tender_id: int, actor: AdminActor, session: Session = SessionDep):
+def list_tender_verdicts(tender_id: int, session: Session = SessionDep):
     if session.get(Tender, tender_id) is None:
         raise _not_found("tender")
     rows = session.scalars(
@@ -738,7 +1035,7 @@ def list_tender_verdicts(tender_id: int, actor: AdminActor, session: Session = S
 
 
 @router.get("/settings")
-def get_settings(actor: CurrentActor, session: Session = SessionDep):
+def get_settings(session: Session = SessionDep):
     row = session.get(Setting, 1)
     if row is None:
         return {
@@ -757,14 +1054,11 @@ def get_settings(actor: CurrentActor, session: Session = SessionDep):
             "updated_at": None,
         }
     data = _setting(row)
-    if actor.role != "admin":
-        data["triage_rules"] = None
-        data["monthly_ai_budget"] = None
     return data
 
 
 @router.put("/settings")
-def update_settings(payload: SettingsWrite, actor: AdminActor, session: Session = SessionDep):
+def update_settings(payload: SettingsWrite, session: Session = SessionDep):
     changes = payload.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(422, detail={"code": "empty_update"})
@@ -790,19 +1084,19 @@ def update_settings(payload: SettingsWrite, actor: AdminActor, session: Session 
         row.test_mode = test_mode
         row.test_mode_reason = reason
         row.test_mode_enabled_at = datetime.now(UTC)
-        row.test_mode_enabled_by = actor.identity
+        row.test_mode_enabled_by = ADMIN_API_AUDIT_ACTOR
         changed["test_mode"] = test_mode
         if reason:
             changed["test_mode_reason"] = True
     if changed:
         row.version = int(row.version or 0) + 1
-        _commit_audit(session, actor, "Setting", 1, changed)
+        _commit_audit(session, "Setting", 1, changed)
     session.flush()
     return _setting(row)
 
 
 @router.get("/triage")
-def get_triage(actor: CurrentActor, session: Session = SessionDep):
+def get_triage(session: Session = SessionDep):
     row = session.get(Setting, 1)
     rules = (row.triage_rules or {}) if row else {}
     return {
@@ -817,7 +1111,7 @@ def get_triage(actor: CurrentActor, session: Session = SessionDep):
 
 
 @router.put("/triage")
-def update_triage(payload: TriageWrite, actor: AdminActor, session: Session = SessionDep):
+def update_triage(payload: TriageWrite, session: Session = SessionDep):
     row = session.get(Setting, 1)
     if row is None:
         row = Setting.seed_default()
@@ -840,14 +1134,13 @@ def update_triage(payload: TriageWrite, actor: AdminActor, session: Session = Se
         changed["urgency_window_days"] = urgency
     if changed:
         row.version = int(row.version or 0) + 1
-        _commit_audit(session, actor, "Setting", 1, changed)
+        _commit_audit(session, "Setting", 1, changed)
     session.flush()
-    return get_triage(actor, session)
+    return get_triage(session)
 
 
 @router.get("/llm/profiles")
 def list_llm_profiles(
-    actor: CurrentActor,
     session: Session = SessionDep,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -856,25 +1149,12 @@ def list_llm_profiles(
         select(LLMProfile).order_by(LLMProfile.id).offset(offset).limit(limit)
     ).all()
     total = session.scalar(select(func.count()).select_from(LLMProfile)) or 0
-    items = (
-        [_profile(row) for row in rows]
-        if actor.role == "admin"
-        else [
-            {
-                "id": row.id,
-                "name": row.name,
-                "model": row.model,
-                "active": row.active,
-                "approved_for_company_docs": row.approved_for_company_docs,
-            }
-            for row in rows
-        ]
-    )
+    items = [_profile(row) for row in rows]
     return {"items": items, "pagination": {"offset": offset, "limit": limit, "total": total}}
 
 
 @router.post("/llm/profiles", status_code=201)
-def create_llm_profile(payload: LLMProfileWrite, actor: AdminActor, session: Session = SessionDep):
+def create_llm_profile(payload: LLMProfileWrite, session: Session = SessionDep):
     data = payload.model_dump(exclude={"api_key"})
     data["api_key_encrypted"] = _secret_envelope(payload.api_key)
     row = LLMProfile(**data)
@@ -885,7 +1165,6 @@ def create_llm_profile(payload: LLMProfileWrite, actor: AdminActor, session: Ses
         raise HTTPException(409, detail={"code": "llm_profile_name_conflict"}) from exc
     _commit_audit(
         session,
-        actor,
         "LLMProfile",
         row.id,
         {
@@ -900,24 +1179,16 @@ def create_llm_profile(payload: LLMProfileWrite, actor: AdminActor, session: Ses
 
 
 @router.get("/llm/profiles/{profile_id}")
-def get_llm_profile(profile_id: int, actor: CurrentActor, session: Session = SessionDep):
+def get_llm_profile(profile_id: int, session: Session = SessionDep):
     row = session.get(LLMProfile, profile_id)
     if row is None:
         raise _not_found("llm_profile")
-    if actor.role != "admin":
-        return {
-            "id": row.id,
-            "name": row.name,
-            "model": row.model,
-            "active": row.active,
-            "approved_for_company_docs": row.approved_for_company_docs,
-        }
     return _profile(row)
 
 
 @router.put("/llm/profiles/{profile_id}")
 def update_llm_profile(
-    profile_id: int, payload: LLMProfileWrite, actor: AdminActor, session: Session = SessionDep
+    profile_id: int, payload: LLMProfileWrite, session: Session = SessionDep
 ):
     row = session.get(LLMProfile, profile_id)
     if row is None:
@@ -938,12 +1209,12 @@ def update_llm_profile(
         "api_key_configured": bool(row.api_key_encrypted),
         "api_key_updated": secret_set,
     }
-    _commit_audit(session, actor, "LLMProfile", row.id, changed)
+    _commit_audit(session, "LLMProfile", row.id, changed)
     return _profile(row)
 
 
 @router.delete("/llm/profiles/{profile_id}", status_code=204)
-def delete_llm_profile(profile_id: int, actor: AdminActor, session: Session = SessionDep):
+def delete_llm_profile(profile_id: int, session: Session = SessionDep):
     row = session.get(LLMProfile, profile_id)
     if row is None:
         raise _not_found("llm_profile")
@@ -958,25 +1229,14 @@ def delete_llm_profile(profile_id: int, actor: AdminActor, session: Session = Se
         )
     ):
         raise HTTPException(409, detail={"code": "profile_in_use"})
-    _commit_audit(session, actor, "LLMProfile", row.id, {"deleted": True})
+    _commit_audit(session, "LLMProfile", row.id, {"deleted": True})
     session.delete(row)
     return Response(status_code=204)
 
 
 @router.get("/llm/roles")
-def list_roles(actor: CurrentActor, session: Session = SessionDep):
+def list_roles(session: Session = SessionDep):
     rows = session.scalars(select(LLMRoleAssignment).order_by(LLMRoleAssignment.role)).all()
-    if actor.role != "admin":
-        return {
-            "items": [
-                {
-                    "role": row.role,
-                    "profile_id": row.profile_id,
-                    "fallback_profile_id": row.fallback_profile_id,
-                }
-                for row in rows
-            ]
-        }
     return {
         "items": [
             {
@@ -992,7 +1252,7 @@ def list_roles(actor: CurrentActor, session: Session = SessionDep):
 
 
 @router.get("/llm/usage")
-def llm_usage(actor: CurrentActor, session: Session = SessionDep):
+def llm_usage(session: Session = SessionDep):
     now = datetime.now(UTC)
     month_start = datetime(now.year, now.month, 1, tzinfo=UTC)
     calls = session.scalars(select(LLMCall).where(LLMCall.created_at >= month_start)).all()
@@ -1009,7 +1269,7 @@ def llm_usage(actor: CurrentActor, session: Session = SessionDep):
 
 
 @router.put("/llm/roles/{role}")
-def set_role(role: str, payload: RoleWrite, actor: AdminActor, session: Session = SessionDep):
+def set_role(role: str, payload: RoleWrite, session: Session = SessionDep):
     if role != payload.role:
         raise HTTPException(422, detail={"code": "role_path_mismatch"})
     profile = _safe_profile_exists(session, payload.profile_id)
@@ -1029,7 +1289,6 @@ def set_role(role: str, payload: RoleWrite, actor: AdminActor, session: Session 
         raise HTTPException(409, detail={"code": "role_assignment_conflict"}) from exc
     _commit_audit(
         session,
-        actor,
         "LLMRoleAssignment",
         row.id,
         {
@@ -1047,7 +1306,7 @@ def set_role(role: str, payload: RoleWrite, actor: AdminActor, session: Session 
 
 @router.post("/llm/profiles/{profile_id}/test")
 def test_llm_connection(
-    profile_id: int, request: Request, actor: AdminActor, session: Session = SessionDep
+    profile_id: int, request: Request, session: Session = SessionDep
 ):
     profile = session.get(LLMProfile, profile_id)
     if profile is None:
@@ -1060,15 +1319,64 @@ def test_llm_connection(
 
     correlation_id = new_correlation_id()
     started = time.monotonic()
+    timeout_seconds = int(profile.timeout_seconds)
+    # Keep the probe small — 64 tokens is sufficient for a minimal connection test.
+    # Providers that need more room for internal reasoning can be configured with
+    # a higher max_output_tokens in their profile.
+    test_max_tokens = 64
+    test_profile = copy.copy(profile)
+    test_profile.temperature = 0.0
+    test_profile.top_p = 0.95
+    test_profile.max_output_tokens = test_max_tokens
+    test_profile.enable_thinking = False
+    test_profile.reasoning_budget = None
+    test_profile.supports_json = False
+    endpoint = _safe_llm_endpoint(profile.base_url)
+    request_config = {
+        "temperature": 0.0,
+        "top_p": 0.95,
+        "max_tokens": test_max_tokens,
+        "enable_thinking": False,
+        "reasoning_budget": 0,
+        "stream": False,
+        "response_format": None,
+    }
     try:
         key = get_master_key()
         api_key = (
             decrypt_secret(profile.api_key_encrypted, key) if profile.api_key_encrypted else ""
         )
-        client = factory(profile=profile, api_key=api_key)
-        result = client.chat([LLMMessage("user", "Reply with the word OK.")], max_tokens=16)
+        client = factory(profile=test_profile, api_key=api_key)
+        result = client.chat(
+            [LLMMessage("user", 'Return exactly this JSON: {"ok":true}')],
+            max_tokens=test_max_tokens,
+        )
         latency_ms = int((time.monotonic() - started) * 1000)
     except Exception as exc:  # safe external/provider boundary
+        latency_ms = int((time.monotonic() - started) * 1000)
+        category = _safe_error_code(getattr(exc, "error_code", None), "provider_error")
+        http_status = getattr(exc, "http_status", None)
+        diagnostic_phase = getattr(exc, "diagnostic_phase", None)
+        if not diagnostic_phase:
+            diagnostic_phase = "http_response_received"
+            if http_status is None:
+                diagnostic_phase = "provider_wrapper_or_before_http"
+        diagnostic = {
+            "provider": profile.name,
+            "model": profile.model,
+            "request_url": endpoint,
+            "http_status": http_status,
+            "category": category,
+            "timeout_seconds": timeout_seconds,
+            "elapsed_ms": latency_ms,
+            "exception_class": _safe_exception_class(exc),
+            "phase": diagnostic_phase,
+            "safe_message": _safe_provider_message(category),
+        }
+        logger.warning(
+            "LLM provider connection test failed",
+            extra={"stage": "admin_llm_test", "status": "failed", "extra": diagnostic},
+        )
         session.add(
             LLMCall(
                 correlation_id=correlation_id,
@@ -1076,11 +1384,12 @@ def test_llm_connection(
                 profile_id=profile.id,
                 provider=profile.name,
                 model=profile.model,
-                latency_ms=int((time.monotonic() - started) * 1000),
+                latency_ms=latency_ms,
                 status="failed",
                 error_code=_safe_error_code(
                     getattr(exc, "error_code", None), "provider_test_failed"
                 ),
+                request_config=request_config,
             )
         )
         session.flush()
@@ -1089,9 +1398,8 @@ def test_llm_connection(
             content={
                 "error": {
                     "code": "provider_test_failed",
-                    "category": _safe_error_code(
-                        getattr(exc, "error_code", None), "provider_error"
-                    ),
+                    "category": category,
+                    "diagnostic": diagnostic,
                 }
             },
         )
@@ -1106,24 +1414,89 @@ def test_llm_connection(
             tokens_in=getattr(usage, "prompt_tokens", None),
             tokens_out=getattr(usage, "completion_tokens", None),
             est_cost=getattr(usage, "estimated_cost_usd", None),
+            request_config=request_config,
             latency_ms=latency_ms,
             status="success",
         )
     )
     session.flush()
+    logger.info(
+        "LLM provider connection test succeeded",
+        extra={
+            "stage": "admin_llm_test",
+            "status": "success",
+            "extra": {
+                "provider": profile.name,
+                "model": result.model,
+                "request_url": endpoint,
+                "http_status": 200,
+                "timeout_seconds": timeout_seconds,
+                "elapsed_ms": latency_ms,
+                "request_config": request_config,
+                "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                "completion_tokens": getattr(usage, "completion_tokens", None),
+            },
+        },
+    )
     return {
         "status": "success",
         "provider": profile.name,
+        "provider_name": profile.provider_name,
+        "protocol": profile.protocol,
         "model": result.model,
         "latency_ms": latency_ms,
         "supports_json": profile.supports_json,
         "supports_vision": profile.supports_vision,
+        "supports_response_format": profile.supports_response_format,
+        "supports_include_reasoning": profile.supports_include_reasoning,
+        "supports_chat_template_kwargs": profile.supports_chat_template_kwargs,
+        "supports_reasoning_effort": profile.supports_reasoning_effort,
+        "reasoning_effort": profile.reasoning_effort,
+        "http_status": 200,
+        "request_url": endpoint,
+        "timeout_seconds": timeout_seconds,
+        "request_config": request_config,
+        "response_summary": "completion_received",
+        "usage": {
+            "prompt_tokens": getattr(usage, "prompt_tokens", None),
+            "completion_tokens": getattr(usage, "completion_tokens", None),
+        },
     }
+
+
+def _safe_llm_endpoint(base_url: str) -> str:
+    """Return scheme/host/path only, excluding userinfo, query, and fragment."""
+    parsed = urlsplit(base_url)
+    host = parsed.hostname or "invalid-host"
+    port = f":{parsed.port}" if parsed.port else ""
+    path = parsed.path.rstrip("/") + "/chat/completions"
+    return f"{parsed.scheme}://{host}{port}{path}"
+
+
+def _safe_provider_message(category: str) -> str:
+    return {
+        "timeout_before_http_response": "Timed out before an HTTP response was received.",
+        "ai_call_timeout": "Timed out after HTTP response headers while reading the response.",
+        "provider_unreachable": "The provider could not be reached.",
+        "provider_authentication_failed": "The provider rejected authentication.",
+        "rate_limit": "The provider rate limit was reached.",
+        "provider_server_error": "The provider returned a server error.",
+        "provider_request_rejected": "The provider rejected the request.",
+        "provider_payload_too_large": (
+            "The provider rejected the request because its payload was too large."
+        ),
+        "invalid_provider_response": "The provider returned an invalid response.",
+    }.get(category, "The provider request failed.")
+
+
+def _safe_exception_class(exc: Exception) -> str:
+    root = exc.__cause__ or exc
+    name = type(root).__name__
+    return name if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name) else "Exception"
 
 
 @router.get("/recipients")
 def list_recipients(
-    actor: CurrentActor,
     session: Session = SessionDep,
     list_type: Literal["tender", "dev_alert"] | None = None,
 ):
@@ -1131,24 +1504,16 @@ def list_recipients(
     if list_type:
         query = query.where(Recipient.list_type == list_type)
     rows = session.scalars(query).all()
-    if actor.role != "admin":
-        return {
-            "items": [
-                {"id": row.id, "name": row.name, "list_type": row.list_type, "active": row.active}
-                for row in rows
-            ]
-        }
     return {"items": [_recipient(row) for row in rows]}
 
 
 @router.post("/recipients", status_code=201)
-def create_recipient(payload: RecipientWrite, actor: AdminActor, session: Session = SessionDep):
+def create_recipient(payload: RecipientWrite, session: Session = SessionDep):
     row = Recipient(**payload.model_dump())
     session.add(row)
     session.flush()
     _commit_audit(
         session,
-        actor,
         "Recipient",
         row.id,
         {"created": True, "list_type": row.list_type, "email": row.email},
@@ -1167,7 +1532,7 @@ def _protect_last_dev(session: Session, row: Recipient) -> None:
 
 @router.put("/recipients/{recipient_id}")
 def update_recipient(
-    recipient_id: int, payload: RecipientWrite, actor: AdminActor, session: Session = SessionDep
+    recipient_id: int, payload: RecipientWrite, session: Session = SessionDep
 ):
     row = session.get(Recipient, recipient_id)
     if row is None:
@@ -1186,46 +1551,34 @@ def update_recipient(
     except IntegrityError as exc:
         session.rollback()
         raise HTTPException(409, detail={"code": "recipient_email_conflict"}) from exc
-    _commit_audit(session, actor, "Recipient", row.id, {"fields": sorted(values)})
+    _commit_audit(session, "Recipient", row.id, {"fields": sorted(values)})
     return _recipient(row)
 
 
 @router.delete("/recipients/{recipient_id}", status_code=204)
-def delete_recipient(recipient_id: int, actor: AdminActor, session: Session = SessionDep):
+def delete_recipient(recipient_id: int, session: Session = SessionDep):
     row = session.get(Recipient, recipient_id)
     if row is None:
         raise _not_found("recipient")
     _protect_last_dev(session, row)
     _commit_audit(
-        session, actor, "Recipient", row.id, {"deleted": True, "list_type": row.list_type}
+        session, "Recipient", row.id, {"deleted": True, "list_type": row.list_type}
     )
     session.delete(row)
     return Response(status_code=204)
 
 
 @router.get("/mail/providers")
-def list_mail_providers(actor: CurrentActor, session: Session = SessionDep):
+def list_mail_providers(session: Session = SessionDep):
     rows = session.scalars(
         select(MailProvider).order_by(MailProvider.priority, MailProvider.id)
     ).all()
-    if actor.role != "admin":
-        return {
-            "items": [
-                {
-                    "id": row.id,
-                    "name": row.name,
-                    "active": row.active,
-                    "breaker_state": row.breaker_state,
-                }
-                for row in rows
-            ]
-        }
     return {"items": [_provider(row) for row in rows]}
 
 
 @router.post("/mail/providers", status_code=201)
 def create_mail_provider(
-    payload: MailProviderWrite, actor: AdminActor, session: Session = SessionDep
+    payload: MailProviderWrite, session: Session = SessionDep
 ):
     row = MailProvider(
         name=payload.name,
@@ -1248,7 +1601,6 @@ def create_mail_provider(
         raise HTTPException(409, detail={"code": "mail_provider_name_conflict"}) from exc
     _commit_audit(
         session,
-        actor,
         "MailProvider",
         row.id,
         {
@@ -1263,7 +1615,7 @@ def create_mail_provider(
 
 @router.put("/mail/providers/{provider_id}")
 def update_mail_provider(
-    provider_id: int, payload: MailProviderWrite, actor: AdminActor, session: Session = SessionDep
+    provider_id: int, payload: MailProviderWrite, session: Session = SessionDep
 ):
     row = session.get(MailProvider, provider_id)
     if row is None:
@@ -1280,7 +1632,6 @@ def update_mail_provider(
         raise HTTPException(409, detail={"code": "mail_provider_name_conflict"}) from exc
     _commit_audit(
         session,
-        actor,
         "MailProvider",
         row.id,
         {
@@ -1294,19 +1645,19 @@ def update_mail_provider(
 
 @router.patch("/mail/providers/{provider_id}/active")
 def set_mail_provider_active(
-    provider_id: int, payload: ActiveWrite, actor: AdminActor, session: Session = SessionDep
+    provider_id: int, payload: ActiveWrite, session: Session = SessionDep
 ):
     row = session.get(MailProvider, provider_id)
     if row is None:
         raise _not_found("mail_provider")
     row.active = payload.active
     session.flush()
-    _commit_audit(session, actor, "MailProvider", row.id, {"active": row.active})
+    _commit_audit(session, "MailProvider", row.id, {"active": row.active})
     return _provider(row)
 
 
 @router.get("/knowledge-base/versions")
-def list_kb_versions(actor: AdminActor, session: Session = SessionDep):
+def list_kb_versions(session: Session = SessionDep):
     rows = session.scalars(
         select(KnowledgeBaseVersion).order_by(
             KnowledgeBaseVersion.created_at.desc(), KnowledgeBaseVersion.id.desc()
@@ -1335,6 +1686,7 @@ def list_kb_versions(actor: AdminActor, session: Session = SessionDep):
                 "created_at": _iso(row.created_at),
                 "created_by": row.created_by,
                 "note": row.note,
+                "metadata": row.metadata_json or {},
             }
             for row in rows
         ],
@@ -1347,7 +1699,7 @@ def list_kb_versions(actor: AdminActor, session: Session = SessionDep):
 
 @router.get("/knowledge-base/versions/{version_id}")
 def get_kb_version(
-    version_id: int, actor: AdminActor, request: Request, session: Session = SessionDep
+    version_id: int, request: Request, session: Session = SessionDep
 ):
     row = session.get(KnowledgeBaseVersion, version_id)
     if row is None:
@@ -1361,6 +1713,7 @@ def get_kb_version(
         "created_at": _iso(row.created_at),
         "created_by": row.created_by,
         "note": row.note,
+        "metadata": row.metadata_json or {},
     }
 
 
@@ -1411,7 +1764,7 @@ def _extract_kb_text(content: bytes, filename: str) -> bytes:
 
 
 @router.post("/knowledge-base/versions", status_code=201)
-def upload_kb(payload: KBWrite, request: Request, actor: AdminActor, session: Session = SessionDep):
+def upload_kb(payload: KBWrite, request: Request, session: Session = SessionDep):
     try:
         content = base64.b64decode(payload.content_base64, validate=True)
     except Exception as exc:
@@ -1436,14 +1789,16 @@ def upload_kb(payload: KBWrite, request: Request, actor: AdminActor, session: Se
         content_ref=key,
         content_hash=digest,
         token_count=token_count,
-        created_by=actor.identity,
+        created_by=ADMIN_API_AUDIT_ACTOR,
         note=payload.note,
+        metadata_json={"document_type": payload.document_type, "date": payload.date,
+                       "tags": payload.tags, "summary": payload.summary,
+                       "source": payload.source, **payload.structured_metadata},
     )
     session.add(row)
     session.flush()
     _commit_audit(
         session,
-        actor,
         "KnowledgeBaseVersion",
         row.id,
         {"created": True, "content_hash": digest, "token_count": token_count},
@@ -1455,6 +1810,7 @@ def upload_kb(payload: KBWrite, request: Request, actor: AdminActor, session: Se
         "token_count_method": "whitespace_word_estimate",
         "created_at": _iso(row.created_at),
         "note": row.note,
+        "metadata": row.metadata_json or {},
     }
 
 
@@ -1477,7 +1833,6 @@ def _token_count(content: bytes, filename: str) -> int:
 
 @router.get("/knowledge-base/diff")
 def diff_kb(
-    actor: AdminActor,
     request: Request,
     session: Session = SessionDep,
     from_id: int = Query(gt=0),
@@ -1502,7 +1857,6 @@ def diff_kb(
 
 @router.get("/audit")
 def list_audit(
-    actor: AdminActor,
     session: Session = SessionDep,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -1532,7 +1886,7 @@ def list_audit(
 
 @router.post("/mail/test")
 def send_test_email(
-    payload: TestEmailWrite, request: Request, actor: AdminActor, session: Session = SessionDep
+    payload: TestEmailWrite, request: Request, session: Session = SessionDep
 ):
     settings = session.get(Setting, 1)
     if settings is None or not settings.test_mode:
@@ -1554,7 +1908,6 @@ def send_test_email(
         raise HTTPException(502, detail={"code": "test_email_failed"}) from exc
     _commit_audit(
         session,
-        actor,
         "TestEmail",
         getattr(result, "notification_log_id", None),
         {
@@ -1578,7 +1931,7 @@ def send_test_email(
 
 @router.post("/mail/providers/{provider_id}/test")
 def test_mail_provider(
-    provider_id: int, request: Request, actor: AdminActor, session: Session = SessionDep
+    provider_id: int, request: Request, session: Session = SessionDep
 ):
     row = session.get(MailProvider, provider_id)
     if row is None:
@@ -1609,7 +1962,6 @@ def test_mail_provider(
         raise HTTPException(502, detail={"code": "mail_provider_test_failed"}) from exc
     _commit_audit(
         session,
-        actor,
         "MailProviderTest",
         provider_id,
         {"status": result.status, "provider": result.provider_used, "recipient_id": recipient.id},
@@ -1628,7 +1980,7 @@ def test_mail_provider(
 
 
 @router.get("/health/dashboard")
-def admin_health(actor: CurrentActor, session: Session = SessionDep):
+def admin_health(session: Session = SessionDep):
     now = datetime.now(UTC)
     since7, since30 = now - timedelta(days=7), now - timedelta(days=30)
     sources = session.scalars(select(Source).order_by(Source.id)).all()

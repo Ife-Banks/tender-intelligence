@@ -1,0 +1,39 @@
+{
+  "artifact": "prompt-14-remediation-2",
+  "scope": "Prompt 14 implementation remediation #2",
+  "gate": "PROMPT 14 REMEDIATION #2: IMPLEMENTED — READY FOR INDEPENDENT RE-VERIFICATION",
+  "prompt_14_verified": false,
+  "blockers": {
+    "headless_worker_stage_b_wiring": {
+      "status": "addressed",
+      "evidence": "worker.main() calls build_pipeline(), then the returned production Worker.run_once(); the real coordinator retains verdict_handoff."
+    },
+    "independent_requirement_completeness": {
+      "status": "addressed_with_semantic_recall_limitation",
+      "mechanism": "Distinct structured extraction call over processed source documents; exact quoted source references validated against source bundle; final requirement and assessment sets checked for exact equality with extracted set.",
+      "limitation": "A probabilistic extraction pass with validated citations is not a formal guarantee that every semantic requirement was recalled."
+    }
+  },
+  "focused_tests": {
+    "worker_and_orchestration": {"result": "passed", "passed": 27},
+    "worker_entrypoint_parameter_cases": {"result": "passed", "passed": 2, "cases": ["Stage B persisted verdict", "Stage B failure persisted without verdict"]},
+    "stage_b_verdict_engine": {"result": "passed", "passed": 12},
+    "requirements_completeness": {"result": "passed", "cases": ["complete R1/R2/R3", "missing assessment", "orphan assessment", "model omission", "incomplete inputs"]},
+    "triage_gates": {"result": "passed", "cases": ["DISCARD", "triage failure"]}
+  },
+  "full_suite": {
+    "passed": 632,
+    "failed": 1,
+    "warnings": 1,
+    "duration_seconds": 240.15,
+    "failure": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt",
+    "failure_scope": "Separate Prompt 12.1 regression; explicitly not changed in this remediation."
+  },
+  "ruff": {"result": "passed", "scope": ["src/tender_intelligence/worker/main.py", "src/tender_intelligence/verdict/service.py", "tests/integration/test_worker.py", "tests/integration/test_verdict_engine.py", "tests/integration/test_orchestrator_pipeline.py"]},
+  "remaining_configuration_limits": ["production provider credentials/approval", "monthly AI budget", "production alert and email configuration", "OPEX KB content", "external source credentials", "deployment behavior"],
+  "artifacts_created": [
+    "demo-evidence/prompt-14-remediation-2-report.md",
+    "demo-evidence/prompt-14-remediation-2.json",
+    "demo-evidence/prompt-14-remediation-2-summary.txt"
+  ]
+}

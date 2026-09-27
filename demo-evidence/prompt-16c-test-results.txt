@@ -1,0 +1,53 @@
+Prompt 16C implementation test results
+=======================================
+
+Focused Admin API/UI-shaped integration tests
+Command:
+  .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16c-final-confirm tests/integration/test_admin_api_prompt15.py tests/integration/test_admin_ui_api_prompt16b.py
+Purpose: Verify no-login Admin API reads/writes, Test Mode/recipient constraints, audit attribution,
+         secret non-return, dry-run behavior, and Prompt 16B payload persistence.
+Result: PASS — 19 passed, 0 failed. Re-run after removing no-op identity headers from the test calls.
+
+UI tests
+Command:
+  node --test tests/ui/*.test.mjs
+Purpose: Verify fixture behavior, all ten screen contracts, no simulated identity/auth headers,
+         secret handling, Test Mode actions, and API error behavior.
+Result: PASS — 26 passed, 0 failed.
+
+JavaScript syntax
+Commands:
+  node --check src/tender_intelligence/admin/static/api.mjs
+  node --check src/tender_intelligence/admin/static/app.mjs
+Purpose: Check frontend module syntax after removing auth/role branches.
+Result: PASS — both modules parse.
+
+Python lint
+Command:
+  .venv\Scripts\ruff.exe check src/tender_intelligence/admin/api.py src/tender_intelligence/admin/main.py src/tender_intelligence/config/settings.py tests/integration/test_admin_api_prompt15.py tests/integration/test_admin_ui_api_prompt16b.py
+Purpose: Check changed backend and integration test modules.
+Result: PASS — all checks passed.
+
+Full Python suite
+Command:
+  .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=.pytest-16c-full-final
+Purpose: Regression suite across existing application stages and Admin API behavior.
+Result: FAIL — 619 collected; 618 passed, 1 known pre-existing failure.
+Failure:
+  tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt
+Summary: WAHO parser returned no deadline for the French July/GMT test fixture. This is outside
+         Prompt 16C ownership and was not modified.
+
+Collection count
+Command:
+  .venv\Scripts\python.exe -m pytest --collect-only -q -p no:cacheprovider
+Purpose: Determine full-suite test count.
+Result: 619 tests collected.
+
+Configuration hygiene
+Command:
+  git check-ignore .env
+Purpose: Confirm the real local environment file is ignored by Git.
+Result: PASS — `.env` is ignored; `.env.example` contains placeholders/config keys only.
+
+No real provider, email recipient, production user, LLM, or business notification was contacted.

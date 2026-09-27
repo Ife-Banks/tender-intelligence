@@ -1,0 +1,12 @@
+PROMPT 14 REMEDIATION #2: IMPLEMENTED — READY FOR INDEPENDENT RE-VERIFICATION
+
+Implemented the actual headless worker startup path through build_pipeline() and Worker.run_once(), with the production RunCoordinator retaining its Stage B verdict_handoff. Added a distinct source-grounded requirement extraction pass, source quote/location validation, and exact set checks before successful verdict persistence.
+
+Focused worker/orchestration: 27 passed.
+Actual worker entrypoint: 2 passed (Stage B success and Stage B failure cases).
+Stage B/verdict engine: 12 passed.
+Requirement completeness: complete set, missing assessment, orphan assessment, model omission, and incomplete-input cases passed.
+Ruff on changed implementation/test files: passed.
+Full suite: 632 passed, 1 failed, 1 warning. The sole failure is the separate, out-of-scope Prompt 12.1 regression: tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt.
+
+The extraction pass is a separate model call with validated source citations and exact downstream assessment-set enforcement; semantic recall is not a formal guarantee. Production configuration and deployment limits remain open and are not marked passed. This does not declare Prompt 14 VERIFIED.

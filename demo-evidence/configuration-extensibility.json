@@ -1,0 +1,38 @@
+{
+  "gate": "CONFIGURATION EXTENSIBILITY: IMPLEMENTED — READY FOR INDEPENDENT VERIFICATION",
+  "admin_application": "existing static HTML/CSS/ES-module application and Admin API extended/reused; no React migration or redesign",
+  "configuration": {
+    "sources": ["create", "edit", "disable", "crawl_frequency", "supported_source_type", "parser_config", "expected_languages", "source_recipient_scope"],
+    "notifications": ["recipient_crud", "global_or_source_scope", "mail_provider_crud", "test_mode"],
+    "knowledge_base": ["upload", "metadata", "immutable_versions"],
+    "triage": ["configured_keywords", "configured_target_sectors", "configured_regions", "configured_minimum_contract_value", "relevance_threshold", "urgency_window_days"]
+  },
+  "reload": {
+    "config_loader_reads_fresh_config_per_source_run": true,
+    "scheduler_reads_persisted_source_frequency": true,
+    "worker_restart_required_for_normal_db_configuration_changes": false
+  },
+  "source_dry_run": {
+    "uses_existing_coordinator_dry_run": true,
+    "reports_discovery_candidate_count_and_plan": true,
+    "persists_business_run_or_tender_records": false,
+    "sends_email": false
+  },
+  "failure_handling": {
+    "source_failure_isolated_from_other_sources": true,
+    "safe_source_error_category_and_run_history_recorded": true,
+    "separate_network_probe_on_startup": false,
+    "reachability_checked_during_discovery_or_admin_dry_run": true
+  },
+  "secrets": {
+    "write_only_encrypted_credentials": true,
+    "api_and_audit_redaction": true,
+    "authentication_added": false
+  },
+  "business_decisions_left_unresolved": ["production recipients", "sender mailbox", "mail tier", "production LLM provider and credentials", "monthly AI budget", "authoritative OPEX KB", "archive storage provider"],
+  "verification": {
+    "status": "passed",
+    "suites": ["integration/test_config_loader.py", "integration/test_admin_api_prompt15.py", "integration/test_admin_ui_api_prompt16b.py", "integration/test_orchestrator_pipeline.py", "integration/test_worker.py"],
+    "full_repository_suite": false
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "final_gate": "NVIDIA MINIMAL LIVE CONNECTION: FAILED",
+  "timestamp_local": "2026-09-26T15:30:32+01:00",
+  "timezone": "Africa/Lagos",
+  "repository_commit": "16b6543",
+  "working_tree_changes_present": true,
+  "runtime": {
+    "health_http_status": 200,
+    "profile_lookup_http_status": 200,
+    "admin_route": "POST /api/v1/llm/profiles/1/test",
+    "admin_route_http_status": 502
+  },
+  "provider": {
+    "name": "NVIDIA",
+    "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "endpoint": "https://integrate.api.nvidia.com/v1/chat/completions",
+    "api_key_configured": true,
+    "api_key_recorded": false
+  },
+  "timeout": {
+    "configured_seconds": 60,
+    "http_client_seconds": 60,
+    "changed": false,
+    "elapsed_ms": 60334,
+    "client_elapsed_seconds": 61.59
+  },
+  "effective_request": {
+    "temperature": 0,
+    "top_p": 0.95,
+    "max_tokens": 64,
+    "enable_thinking": false,
+    "reasoning_budget_effective": 0,
+    "reasoning_budget_field_sent": false,
+    "chat_template_kwargs": {"enable_thinking": false},
+    "stream": false,
+    "response_format": null,
+    "prompt": "Return exactly this JSON: {\"ok\":true}"
+  },
+  "live_result": {
+    "status": "failed",
+    "safe_provider_category": "timeout_before_http_response",
+    "diagnostic_phase": "after_connection_before_response_headers",
+    "exception_class": "ReadTimeout",
+    "nvidia_http_status": null,
+    "response_headers_received": false,
+    "raw_response_body_recorded": false,
+    "authorization_recorded": false,
+    "api_key_recorded": false,
+    "private_reasoning_recorded": false
+  },
+  "tests": {
+    "focused_python_tests": {"passed": 23, "failed": 0},
+    "admin_ui_api_tests": {"passed": 11, "failed": 0},
+    "ruff": "passed"
+  },
+  "notes": [
+    "The OPEX Admin endpoint used the configured LLM profile and existing provider factory/client.",
+    "The profile timeout was left at 60 seconds.",
+    "No /v1/models request is involved in this connection test.",
+    "The observed timeout phase does not identify which upstream component caused the delay."
+  ]
+}

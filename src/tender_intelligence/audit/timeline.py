@@ -310,9 +310,23 @@ class TimelineService:
                     )
 
         # 5. Find RunHistory records (Prompt 10 persisted state)
+        related_run_ids = (
+            select(RunHistory.id).where(RunHistory.tender_id == tender_id)
+            .union(
+                select(TriageResult.run_id).where(
+                    TriageResult.tender_id == tender_id,
+                    TriageResult.run_id.is_not(None),
+                )
+            )
+            if tender_id is not None
+            else select(RunHistory.id).where(RunHistory.id == -1)
+        )
         runs = self.session.scalars(
             select(RunHistory)
-            .where(RunHistory.correlation_id == correlation_id)
+            .where(
+                (RunHistory.correlation_id == correlation_id)
+                | RunHistory.id.in_(related_run_ids)
+            )
             .order_by(RunHistory.started_at)
         ).all()
 
@@ -329,6 +343,7 @@ class TimelineService:
                     source=f"source-{run.source_id}",
                     processing_info={
                         "config_version": run.config_version,
+                        "trigger": run.trigger,
                     },
                     event_id=f"run-start-{run.id}",
                     sequence=0,
@@ -354,6 +369,7 @@ class TimelineService:
                             "error_count": run.error_count,
                             "failed_stage": run.failed_stage,
                             "stages": run.stages,
+                            "trigger": run.trigger,
                         },
                         failure_code=run.error_code,
                         event_id=f"run-end-{run.id}",

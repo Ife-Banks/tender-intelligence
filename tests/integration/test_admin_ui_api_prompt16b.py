@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from tender_intelligence.admin.auth import Actor
 from tender_intelligence.admin.main import create_app
 from tender_intelligence.db.models import ConfigChangeLog, MailProvider, Recipient, Setting, Source
 from tender_intelligence.storage.local import LocalFileSystemStorage
@@ -21,21 +19,13 @@ class _SourceTypes:
 def test_ui_payload_shapes_persist_config_and_audit_without_external_services(
     sqlite_engine, session_factory_gr, tmp_path
 ):
-    def resolver(_request, authorization):
-        if authorization == "Bearer ui-admin-test":
-            return Actor("ui-admin@example.test", "admin")
-        if authorization == "Bearer ui-viewer-test":
-            return Actor("ui-viewer@example.test", "viewer")
-        raise HTTPException(401, detail={"code": "authentication_required"})
-
     app = create_app(
         engine=sqlite_engine,
         sessions=session_factory_gr,
-        actor_resolver=resolver,
         object_storage=LocalFileSystemStorage(tmp_path / "objects"),
         adapter_registry=_SourceTypes(),
     )
-    headers = {"Authorization": "Bearer ui-admin-test"}
+    headers = {}
     with TestClient(app) as client:
         # Mirrors Settings screen: server response, not local optimistic state, is authoritative.
         initial = client.get("/api/v1/settings", headers=headers)

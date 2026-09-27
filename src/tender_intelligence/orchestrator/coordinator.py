@@ -77,14 +77,14 @@ from tender_intelligence.acquisition.service import (
 )
 from tender_intelligence.core.correlation import correlation_context, new_correlation_id
 from tender_intelligence.core.errors import STAGE_FAILED
-from tender_intelligence.deadline.model import RESOLVED as DEADLINE_RESOLVED
-from tender_intelligence.deadline.service import DeadlineResolutionService
 from tender_intelligence.db.repositories import (
     RunCounts,
     RunHistoryRepository,
     SourceRepository,
     TenderRepository,
 )
+from tender_intelligence.deadline.model import RESOLVED as DEADLINE_RESOLVED
+from tender_intelligence.deadline.service import DeadlineResolutionService
 from tender_intelligence.dedup.service import DedupResult, DedupService
 from tender_intelligence.interfaces.source import (
     SourceAdapter,
@@ -133,6 +133,7 @@ class TenderWorkItem:
     tender_id: int
     external_id: str
     correlation_id: str
+    is_update: bool = False
 
 
 @dataclass(frozen=True)
@@ -185,6 +186,7 @@ class RunCoordinator:
         triage_client_factory: LLMClientFactory | None = None,
         triage_pass_handoff: Callable[[TriageDecision], None] | None = None,
         verdict_handoff: Callable[[TriageDecision], None] | None = None,
+        notification_dispatcher: object | None = None,
         clock: Callable[[], datetime] | None = None,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -202,6 +204,7 @@ class RunCoordinator:
         self._triage_client_factory = triage_client_factory
         self._triage_pass_handoff = triage_pass_handoff
         self._verdict_handoff = verdict_handoff
+        self._notification_dispatcher = notification_dispatcher
         self._clock = clock or (lambda: datetime.now(UTC))
         self._sleeper = sleeper
 
@@ -213,6 +216,9 @@ class RunCoordinator:
         *,
         dry_run: bool = False,
         force: bool = False,
+        trigger: str = "scheduled",
+        correlation_id: str | None = None,
+        progress_callback: Callable[[StageOutcome], None] | None = None,
     ) -> RunReport:
         """Run the full pipeline for *source_id* (prompt 10 §2).
 
@@ -236,9 +242,89 @@ class RunCoordinator:
 
         # Prompt 10 §3: configuration is re-read here, per run, and never cached.
         config = self._config_loader.load()
-        run_cid = new_correlation_id()
+        run_cid = correlation_id or new_correlation_id()
         with correlation_context(run_cid):
-            return self._execute(decision.spec, config, run_cid, dry_run=dry_run)
+            return self._execute(
+                decision.spec, config, run_cid, dry_run=dry_run, trigger=trigger,
+                progress_callback=progress_callback,
+            )
+
+    def run_existing_tender(
+        self,
+        tender_id: int,
+        *,
+        correlation_id: str | None = None,
+        progress_callback: Callable[[StageOutcome], None] | None = None,
+    ) -> RunReport:
+        """Reprocess one persisted tender without altering discovery or dedup state."""
+        with self._maker() as session:
+            tender = TenderRepository(session).get(tender_id)
+            if tender is None:
+                raise SourceNotRunnableError("unknown tender", context={"tender_id": tender_id})
+            source_id = int(tender.source_id)
+            item = TenderWorkItem(
+                tender_id=int(tender.id),
+                external_id=str(tender.external_id),
+                correlation_id=str(tender.correlation_id),
+                is_update=bool(tender.is_update),
+            )
+        decision = self._scheduler.get(source_id)
+        if decision is None:
+            raise SourceNotRunnableError("tender source is unavailable", context={"source_id": source_id})
+        config = self._config_loader.load()
+        run_cid = correlation_id or new_correlation_id()
+        with correlation_context(run_cid):
+            started_at = self._clock()
+            run_id = self._open_run(
+                decision.spec, run_cid, config, trigger="manual_tender", tender_id=tender_id
+            )
+            state = _RunState(run_cid=run_cid, dry_run=False)
+            state.progress_callback = progress_callback
+            state.work = [item]
+            for stage in (StageNumber.DISCOVERY, StageNumber.DEDUP, StageNumber.PERSISTENCE):
+                state.record_pending(
+                    stage,
+                    "manual Process Now selected an existing tender; discovery and deduplication were not run",
+                )
+            try:
+                self._drive_existing_tender(decision.spec, item, state, run_id)
+            except Exception:  # noqa: BLE001 - keep manual run history reconstructable
+                log.exception(
+                    "unexpected manual tender processing failure",
+                    extra={"stage": "manual_tender", "status": "error", "correlation_id": run_cid},
+                )
+                state.failed_stage = state.failed_stage or StageNumber.DETAIL
+                state.error_code = state.error_code or STAGE_FAILED
+                state.mark_ended(self._clock())
+            self._pending_remaining(state, "run stopped before this stage")
+            status = RunStatus.FAILED if state.error_code else _run_status(state.outcomes)
+            started_at, ended_at = state.bounds(started_at)
+            self._finalize_run(
+                run_history_id=run_id,
+                run_cid=run_cid,
+                state=state,
+                status=status,
+                config=config,
+            )
+            report = RunReport(
+                source_id=source_id,
+                source_name=decision.spec.name,
+                correlation_id=run_cid,
+                status=status,
+                started_at=started_at,
+                ended_at=ended_at,
+                stages=tuple(state.outcomes),
+                run_history_id=run_id,
+                config_version=config.version,
+                failed_stage=state.failed_stage,
+                error_code=state.error_code,
+                tenders_considered=1,
+                documents_acquired=state.documents_acquired,
+                documents_processed=state.documents_processed,
+            )
+            if status is RunStatus.FAILED:
+                self._alert(report)
+            return report
 
     # -- the run ------------------------------------------------------------
 
@@ -249,6 +335,8 @@ class RunCoordinator:
         run_cid: str,
         *,
         dry_run: bool,
+        trigger: str = "scheduled",
+        progress_callback: Callable[[StageOutcome], None] | None = None,
     ) -> RunReport:
         started_at = self._clock()
         log.info(
@@ -264,8 +352,9 @@ class RunCoordinator:
             },
         )
 
-        run_history_id = None if dry_run else self._open_run(spec, run_cid, config)
+        run_history_id = None if dry_run else self._open_run(spec, run_cid, config, trigger=trigger)
         state = _RunState(run_cid=run_cid, dry_run=dry_run)
+        state.progress_callback = progress_callback
 
         try:
             self._drive(spec, state, run_history_id)
@@ -371,16 +460,54 @@ class RunCoordinator:
         if not state.work:
             return
 
+        self._drive_downstream(spec, state, run_history_id, found.adapter, result)
+
+    def _drive_existing_tender(
+        self,
+        spec: SourceSpec,
+        item: TenderWorkItem,
+        state: _RunState,
+        run_history_id: int,
+    ) -> None:
         detail = self._runner.run(
-            StageNumber.DETAIL, lambda: self._stage_detail(found.adapter, state.work)
+            StageNumber.DETAIL,
+            lambda: self._stage_manual_detail(spec, [item]),
         )
         state.record(detail.outcome)
         if detail.outcome.status is StageStatus.FAILED:
             return
 
+        self._drive_after_detail(state, run_history_id, detail.payload or {}, None, manual=True)
+
+    def _drive_downstream(
+        self,
+        spec: SourceSpec,
+        state: _RunState,
+        run_history_id: int | None,
+        adapter: SourceAdapter,
+        dedup_result: DedupResult | None,
+    ) -> None:
+        detail = self._runner.run(
+            StageNumber.DETAIL, lambda: self._stage_detail(adapter, state.work)
+        )
+        state.record(detail.outcome)
+        if detail.outcome.status is StageStatus.FAILED:
+            return
+        self._drive_after_detail(state, run_history_id, detail.payload or {}, dedup_result)
+
+    def _drive_after_detail(
+        self,
+        state: _RunState,
+        run_history_id: int | None,
+        attachments: dict[int, list[TenderAttachment]],
+        dedup_result: DedupResult | None,
+        *,
+        manual: bool = False,
+    ) -> None:
+
         acquisition = self._runner.run(
             StageNumber.ACQUISITION,
-            lambda: self._stage_acquisition(state.work, detail.payload or {}),
+            lambda: self._stage_acquisition(state.work, attachments),
         )
         state.record(acquisition.outcome)
         if acquisition.payload is not None:
@@ -401,12 +528,40 @@ class RunCoordinator:
         passed_decisions = triage.payload or []
         if self._verdict_handoff is None:
             state.record_skipped(StageNumber.VERDICT, "no Stage B engine configured")
+            state.record_skipped(StageNumber.NOTIFICATION, "no Stage B verdicts to notify")
         else:
             verdict = self._runner.run(
                 StageNumber.VERDICT,
                 lambda: self._stage_verdict(passed_decisions),
             )
             state.record(verdict.outcome)
+            verdicts = verdict.payload or []
+            if self._notification_dispatcher is None:
+                state.record_skipped(StageNumber.NOTIFICATION, "no notification channel configured")
+            else:
+                notification = self._runner.run(
+                    StageNumber.NOTIFICATION,
+                    lambda: self._stage_notifications(
+                        verdicts, dedup_result, state.work, manual_existing=manual
+                    ),
+                )
+                state.record(notification.outcome)
+
+    def _stage_manual_detail(
+        self, spec: SourceSpec, work: Sequence[TenderWorkItem]
+    ) -> tuple[StageReport, dict[int, list[TenderAttachment]]]:
+        adapter = self._registry.build(spec)
+        report, attachments = self._stage_detail(adapter, work)
+        return (
+            StageReport(
+                detail=f"manual Process Now: {report.detail}",
+                item_count=report.item_count,
+                failed_items=report.failed_items,
+                attempts=report.attempts,
+                status=report.status,
+            ),
+            attachments,
+        )
 
     # -- 04 discovery -------------------------------------------------------
 
@@ -534,7 +689,7 @@ class RunCoordinator:
     def _resolve_deadline(
         self,
         item: TenderWorkItem,
-        detail: "TenderDetail",  # type: ignore[name-defined]
+        detail: TenderDetail,  # type: ignore[name-defined]
     ) -> bool:
         """Run deadline resolution for *item* using *detail* and persist the result.
 
@@ -542,7 +697,6 @@ class RunCoordinator:
         CONFLICTING).  Per-tender: a failure here is logged but never propagates to fail
         the whole stage — attachment discovery still succeeded.
         """
-        from tender_intelligence.interfaces.source import TenderDetail as _TDType
 
         try:
             with self._maker() as session:
@@ -565,11 +719,10 @@ class RunCoordinator:
                 # Attempt document-bundle lookup for text-based fallback
                 bundle_docs: list[tuple[int, str, str]] = []
                 try:
-                    from tender_intelligence.processing.store import ExtractionStore
-                    from tender_intelligence.processing.representation import TenderDocumentBundle
                     # ExtractionStore requires ObjectStorage — only attempt if processing ran
                     # The coordinator does not own the store directly; check via document rows
                     from sqlalchemy import select as sa_select
+
                     from tender_intelligence.db.models.documents import Document
                     doc_rows = session.scalars(
                         sa_select(Document)
@@ -801,20 +954,113 @@ class RunCoordinator:
             passed,
         )
 
-    def _stage_verdict(self, decisions: Sequence[TriageDecision]) -> tuple[StageReport, int]:
+    def _stage_verdict(
+        self, decisions: Sequence[TriageDecision]
+    ) -> tuple[StageReport, list[tuple[TriageDecision, object]]]:
         """Run Stage B only for persisted Stage A PASS decisions."""
         succeeded = failed = 0
+        available: list[tuple[TriageDecision, object]] = []
         for decision in decisions:
             try:
-                self._verdict_handoff(decision)  # type: ignore[misc]
-                succeeded += 1
+                outcome = self._verdict_handoff(decision)  # type: ignore[misc]
+                outcome_status = getattr(getattr(outcome, "status", None), "value", None)
+                if outcome_status is not None and outcome_status != "VERDICT_AVAILABLE":
+                    failed += 1
+                    log.warning(
+                        "Stage B did not produce an available verdict",
+                        extra={
+                            "stage": StageNumber.VERDICT.value,
+                            "tender_id": decision.tender_id,
+                            "correlation_id": decision.correlation_id,
+                            "status": outcome_status,
+                            "error_code": getattr(outcome, "error_code", "verdict_unavailable"),
+                        },
+                    )
+                else:
+                    succeeded += 1
+                    if outcome_status == "VERDICT_AVAILABLE" and getattr(outcome, "verdict_id", None):
+                        available.append((decision, outcome))
             except Exception as exc:  # per-tender isolation mirrors Stage A
                 failed += 1
                 log.warning("Stage B failed", extra={"stage": StageNumber.VERDICT.value,
                     "tender_id": decision.tender_id, "correlation_id": decision.correlation_id,
                     "error_code": getattr(exc, "error_code", "verdict_failed")})
         return StageReport(detail=f"{succeeded} completed, {failed} failed", item_count=len(decisions),
-                           failed_items=failed), succeeded
+                           failed_items=failed), available
+
+    def _stage_notifications(
+        self,
+        verdicts: Sequence[tuple[TriageDecision, object]],
+        dedup_result: DedupResult | None,
+        work_items: Sequence[TenderWorkItem],
+        *,
+        manual_existing: bool = False,
+    ) -> tuple[StageReport, int]:
+        """Notify only persisted, available verdicts; routing/Test Mode remain service-owned."""
+        from tender_intelligence.notifications.contracts import NotificationEvent, NotificationKind
+
+        updates = {
+            item.listing.external_id: item
+            for item in (dedup_result.updates if dedup_result is not None else ())
+        }
+        new_ids = {
+            listing.external_id
+            for listing in (dedup_result.new_listings if dedup_result is not None else ())
+        }
+        work_by_id = {item.tender_id: item for item in work_items}
+        succeeded = failed = 0
+        for decision, verdict in verdicts:
+            work = work_by_id.get(decision.tender_id)
+            if work is None:
+                failed += 1
+                continue
+            update = updates.get(work.external_id)
+            kind = (
+                NotificationKind.UPDATE
+                if (update is not None or (manual_existing and work.is_update))
+                else NotificationKind.NEW
+            )
+            if update is None and work.external_id not in new_ids and not manual_existing:
+                # Unknown provenance must not be relabelled as a new tender.
+                failed += 1
+                continue
+            event = NotificationEvent(
+                tender_id=work.tender_id,
+                verdict_id=int(verdict.verdict_id),
+                kind=kind,
+                material_change=update.material_change if update else bool(manual_existing and work.is_update),
+                change_types=update.change_types if update else (),
+                change_details=tuple(
+                    (str(key), str(value))
+                    for key, value in (update.change_details.items() if update else ())
+                ),
+                correlation_id=work.correlation_id,
+            )
+            try:
+                outcome = self._notification_dispatcher.send(event)  # type: ignore[attr-defined]
+                if getattr(outcome, "status", "") in {"sent", "already_notified", "dry_run"}:
+                    succeeded += 1
+                else:
+                    failed += 1
+                    log.warning(
+                        "notification delivery did not complete",
+                        extra={"stage": StageNumber.NOTIFICATION.value,
+                               "tender_id": work.tender_id,
+                               "correlation_id": work.correlation_id,
+                               "error_code": getattr(outcome, "error_code", None)},
+                    )
+            except Exception as exc:  # noqa: BLE001 - mail failure must not erase persisted verdict
+                failed += 1
+                log.warning("notification delivery failed", extra={
+                    "stage": StageNumber.NOTIFICATION.value,
+                    "tender_id": work.tender_id,
+                    "correlation_id": work.correlation_id,
+                    "error_code": getattr(exc, "error_code", "notification_failed"),
+                })
+        return StageReport(
+            detail=f"{succeeded} delivered or already notified, {failed} failed",
+            item_count=len(verdicts), failed_items=failed,
+        ), succeeded
 
     # -- dry run planning ---------------------------------------------------
 
@@ -866,6 +1112,7 @@ class RunCoordinator:
                     # without one can only be one dedup just created, so fall back rather than
                     # propagate an empty correlation id downstream.
                     correlation_id=str(row.correlation_id or run_cid),
+                    is_update=bool(row.is_update),
                 )
                 for row in rows.values()
             ]
@@ -874,7 +1121,15 @@ class RunCoordinator:
 
     # -- run row ------------------------------------------------------------
 
-    def _open_run(self, spec: SourceSpec, run_cid: str, config: RuntimeConfigSnapshot) -> int:
+    def _open_run(
+        self,
+        spec: SourceSpec,
+        run_cid: str,
+        config: RuntimeConfigSnapshot,
+        *,
+        trigger: str = "scheduled",
+        tender_id: int | None = None,
+    ) -> int:
         """Commit a RUNNING row before stage 04 (prompt 10 §5, §12).
 
         Committed immediately and on its own: a crash anywhere after this point leaves a row
@@ -885,6 +1140,8 @@ class RunCoordinator:
         with self._maker() as session:
             row = RunHistoryRepository(session).create(spec.id, correlation_id=run_cid)
             row.config_version = config.version
+            row.trigger = trigger
+            row.tender_id = tender_id
             session.commit()
             return int(row.id)
 
@@ -1081,9 +1338,15 @@ class _RunState:
         self.failed_stage: StageNumber | None = None
         self.error_code: str | None = None
         self.ended_at: datetime | None = None
+        self.progress_callback: Callable[[StageOutcome], None] | None = None
 
     def record(self, outcome: StageOutcome) -> None:
         self.outcomes.append(outcome)
+        if self.progress_callback is not None:
+            try:
+                self.progress_callback(outcome)
+            except Exception:  # noqa: BLE001 - progress reporting must not affect the run
+                log.warning("run progress callback failed", extra={"stage": outcome.stage.value})
         if outcome.status is StageStatus.FAILED and self.failed_stage is None:
             self.failed_stage = outcome.stage
             self.error_code = outcome.error_code

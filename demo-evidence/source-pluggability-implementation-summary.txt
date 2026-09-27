@@ -1,0 +1,12 @@
+SOURCE PLUGGABILITY: IMPLEMENTED — READY FOR INDEPENDENT VERIFICATION
+
+Generalized the existing paginated HTML implementation to PaginatedHtmlAdapter and retained WahoPaginatedAdapter as a compatibility alias. SourceType now represents the five v1.1 strategies. The registry dispatches by source_type and currently registers only paginated HTML (plus the legacy wahoo alias). Detail URL templates, listing query parameters across pagination, independent detail/reference selectors, and attachment link selectors are configurable.
+
+Configuration-only acceptance test: two differently configured paginated sources are built as the same adapter class and produce source-specific listings; dedup remains source-scoped.
+
+Focused source adapter and WAHO suite: 45 passed.
+Admin API and orchestration suite: 44 passed, 1 existing deprecation warning.
+Ruff: passed.
+Full suite: 632 passed, 1 failed, 1 warning. The sole failure is the explicitly out-of-scope Prompt 12.1 test: tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt.
+
+No new live sources were added. Filtered HTML, search-form, RSS/Atom, and JSON API remain type concepts without runnable adapters. WAHO behavior was preserved; its compatibility alias remains available.

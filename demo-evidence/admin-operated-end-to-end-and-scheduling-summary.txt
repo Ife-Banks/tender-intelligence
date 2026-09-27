@@ -1,0 +1,13 @@
+ADMIN-OPERATED END-TO-END & SCHEDULING: NEEDS FIXES — LIVE ACCEPTANCE PENDING
+
+Implemented source Run Now and existing tender Process Now controls, Test Mode gates,
+per-source operation locks, operation progress/status, auditing, Admin-hosted scheduling,
+source schedule display, and durable trigger/tender run provenance.
+
+Offline verification: coordinator integration passed; offline Admin API subset passed;
+28/28 Node UI tests passed; compileall passed. One default-app API test was excluded because
+it tried to reach the configured remote database, unavailable in this sandbox.
+
+Not verified live: updated Admin process, Sendlib [TEST] delivery receipt to active dev-alert,
+or temporary scheduler cadence followed by restoring the original interval. Restart Admin,
+apply migration 0015, then perform those live acceptance steps. Prompt 17 was not started.

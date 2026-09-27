@@ -1,0 +1,88 @@
+{
+  "artifact": "source-types-implementation",
+  "gate": "SOURCE TYPES: IMPLEMENTED — READY FOR INDEPENDENT VERIFICATION",
+  "independent_verification_claimed": false,
+  "new_live_sources_added": [],
+  "scope_note": "No live source was added, configured or contacted. Every strategy is exercised against an injected in-process transport only, so the evidence is reproducible offline.",
+  "source_types": {
+    "paginated_html_list": "implemented and registered (PaginatedHtmlAdapter)",
+    "filtered_html": "implemented and registered (FilteredHtmlAdapter)",
+    "search_form": "implemented and registered (SearchFormAdapter)",
+    "rss_atom": "implemented and registered (FeedAdapter)",
+    "json_api": "implemented and registered (JsonApiAdapter)",
+    "wahoo": "legacy alias, registered against the paginated HTML adapter"
+  },
+  "registry_check": {
+    "command": "AdapterRegistry.default().source_types",
+    "registered": [
+      "filtered_html",
+      "json_api",
+      "paginated_html_list",
+      "rss_atom",
+      "search_form",
+      "wahoo"
+    ],
+    "all_five_source_types_supported": true
+  },
+  "shared_infrastructure": {
+    "normalize": "src/tender_intelligence/sources/normalize.py",
+    "polite": "src/tender_intelligence/sources/polite.py (Requester, requester_get, method-aware PoliteHttpClient.__call__)",
+    "transport_guarantee": "Every HTTP method of every strategy, including a form submission, an authenticated JSON GET, a JSON POST body, a feed read and inherited HTML detail/attachment reads, is issued through the one injected transport, so robots, user-agent, pacing, timeout, retry/backoff and Retry-After handling cannot be bypassed."
+  },
+  "shared_semantics": {
+    "normalization": "One shared text, whitespace, reference, absolute-URL, timestamp and identity path, so two strategies cannot disagree about what a title or an external_id is.",
+    "provenance": "Every listing and detail record carries the source, the URL it came from, the correlation id and the crawl timestamp.",
+    "bundle_discipline": "An archive is recorded as one attachment; inner files are never enumerated (prompt 07 §3).",
+    "dedupe": "Per-crawl external_id deduplication is unconditional inside each adapter. stop_when_no_new_items only controls termination. Persisted dedupe and update classification stay in DedupService."
+  },
+  "strategy_notes": {
+    "paginated_html_list": "Cross-page external_id dedupe, page cap, visited-URL set, optional no-new-items stopping, selector lists, reusable _crawl, _start_url. WahoPaginatedAdapter remains the compatibility alias.",
+    "filtered_html": "Configured facet combination applied through query parameters, plus the same page cap, visited-URL set and cross-page dedupe as the paginated strategy.",
+    "search_form": "Form submission goes through an injected FormDriver. requires_browser fails explicitly with SOURCE_NOT_RUNNABLE unless a browser-capable driver is supplied; a plain Requester never satisfies it. No browser dependency is introduced.",
+    "rss_atom": "RSS, RDF and Atom, including content:encoded, dc:creator, dc:date, category and enclosure. A feed entry with no link falls back to the feed URL for identity.",
+    "json_api": "items_path and per-field paths with candidate lists, nested detail_paths, page/offset/cursor pagination bounded by page cap, visited URLs and declared total, short-page stop, GET or POST with an optional body, auth resolved through AuthResolver and cleared after the crawl, and detail_response_kind json or html."
+  },
+  "configuration_only_acceptance_test": {
+    "test": "tests/integration/test_source_extensibility.py::test_two_paginated_sources_with_different_selectors_reach_dedup",
+    "result": "passed",
+    "proves": "Two configured source rows of one source type are built as the same adapter class with independent selectors, URLs, detail templates and query parameters, and dedup remains source-scoped."
+  },
+  "tests": {
+    "new_suites": {
+      "tests/unit/test_filtered_html_source.py": 8,
+      "tests/unit/test_search_form_source.py": 12,
+      "tests/unit/test_feed_source.py": 16,
+      "tests/unit/test_json_api_source.py": 32
+    },
+    "existing_suites_unchanged_in_scope": {
+      "tests/unit/test_waho_discovery.py": 26,
+      "tests/unit/test_waho_detail.py": 21,
+      "tests/integration/test_source_extensibility.py": 1
+    },
+    "focused_source_suite": {"passed": 116},
+    "ruff": "passed on sources, registry, interface and all four new test files",
+    "mypy": {
+      "status": "no new errors",
+      "pre_existing": [
+        "src/tender_intelligence/sources/waho.py:608",
+        "src/tender_intelligence/sources/waho.py:609",
+        "src/tender_intelligence/sources/waho.py:628"
+      ],
+      "classification": "Pre-existing _parse_deadline inference errors. Verified outside every added or changed diff hunk, so they were not introduced by this work and were not modified."
+    },
+    "full_suite": {
+      "passed": 703,
+      "failed": 1,
+      "warnings": 1,
+      "duration_seconds": 353.9,
+      "failure": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt",
+      "classification": "Separate out-of-scope Prompt 12.1 regression: the test source carries replacement characters, so the French accented pattern cannot match. Not modified."
+    }
+  },
+  "limitations": [
+    "A source needing a browser still cannot run: it fails explicitly with SOURCE_NOT_RUNNABLE until a browser-capable FormDriver is supplied, because no browser dependency may be added.",
+    "Pagination for JSON APIs without a declared page size cannot know its own end and therefore relies on the page cap or an empty page; declaring page_size, limit or per_page gives a short-page stop.",
+    "A deadline without an explicit offset, Z or UTC marker is rejected rather than silently assumed to be UTC.",
+    "Auth is supported through AuthResolver references only. No new credential store or secret lifecycle was added; plaintext secrets never enter configuration, logs, listing metadata or retained adapter state."
+  ]
+}

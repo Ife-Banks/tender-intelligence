@@ -1,0 +1,26 @@
+{
+  "gate": "ADMIN-OPERATED END-TO-END & SCHEDULING: NEEDS FIXES — LIVE ACCEPTANCE PENDING",
+  "implementation": {
+    "source_run_now": true,
+    "existing_tender_process_now": true,
+    "test_mode_required": true,
+    "notification_guard_preserved": true,
+    "per_source_operation_lock": true,
+    "operation_status_api": true,
+    "audited_manual_operations": true,
+    "admin_hosted_scheduler": true,
+    "source_schedule_status_ui": true,
+    "trigger_and_tender_run_provenance": true,
+    "migration": "0015_run_trigger"
+  },
+  "verification": {
+    "python_compileall": "passed",
+    "orchestrator_integration": "passed",
+    "admin_api_offline_subset": "passed; one default-app test excluded because it attempted unreachable remote DB access",
+    "admin_ui_node_tests": {"passed": 28, "failed": 0},
+    "live_process_now": "not run",
+    "live_sendlib_test_recipient_delivery": "not run; no delivery claimed",
+    "live_temporary_cadence_scheduler_acceptance": "not run"
+  },
+  "operator_action_required": "Restart Admin after applying the migration; perform live Process Now, [TEST] dev-alert delivery, and temporary cadence/restore acceptance."
+}

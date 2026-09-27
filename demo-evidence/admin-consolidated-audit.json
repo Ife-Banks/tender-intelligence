@@ -1,0 +1,63 @@
+{
+  "audit": "pre-prompt-17-consolidated-admin",
+  "date": "2026-09-25",
+  "baseline": {
+    "branch": "main",
+    "commit": "16b6543",
+    "preexisting_untracked_scratch": true
+  },
+  "status": "NEEDS_FIXES",
+  "prompt_17_ready": false,
+  "authentication": {
+    "o11_production_identity_open": true,
+    "production_fail_closed": true,
+    "test_auth_default_off": true,
+    "test_auth_environment_exactly_development": true,
+    "ui_test_auth_opt_in": true,
+    "anonymous_distinguished_from_viewer": true,
+    "test_mode_indicator_safe_when_anonymous": true,
+    "staging_test_headers_rejected": true,
+    "module_test_identity_cleared_on_default_client": true
+  },
+  "admin_api": {
+    "implemented": true,
+    "representative_admin_viewer_authz_tests_passed": true,
+    "secret_safe_dto_audit_tests_passed": true,
+    "postgres_last_dev_recipient_concurrency_proven": false
+  },
+  "admin_ui": {
+    "static_html_css_es_modules": true,
+    "ten_screen_contracts_present": true,
+    "centralized_api_client_only": true,
+    "offline_fixture_fallback_on_401": false,
+    "authenticated_browser_clickthrough": false,
+    "responsive_browser_review_complete": false
+  },
+  "test_mode_preserved": true,
+  "worker_admin_independent": true,
+  "no_real_provider_or_email_calls": true,
+  "tests": {
+    "ui": {"run": 26, "passed": 26, "failed": 0},
+    "admin_api_ui_audit_integration": {"run": 32, "passed": 32, "failed": 0},
+    "full_regression": {"run": 551, "passed": 550, "failed": 1},
+    "changed_python_ruff": {"passed": true},
+    "repository_ruff_findings": 94,
+    "git_diff_check": true
+  },
+  "defects_fixed": [
+    "test auth restricted to TI_ENV=development",
+    "development-only test actor role selection wired through Admin UI",
+    "default API client clears module-level test actor",
+    "accurate O11 anonymous state and fail-closed message",
+    "CSS preserves hidden live-mode controls"
+  ],
+  "remaining_blockers": [
+    "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt fails; outside Prompt 15/16 ownership",
+    "Prompt 15 PostgreSQL last-active development-recipient concurrency remains unverified",
+    "Prompt 16A responsive/browser-console evidence incomplete",
+    "Prompt 16B authenticated browser CRUD/network evidence unavailable",
+    "O11 production identity provider/account decision remains open by design"
+  ],
+  "deferred": ["Prompt 17 broad security hardening", "Prompt 18 hostile QA", "Prompt 19 final code review"],
+  "final_gate": "CONSOLIDATED ADMIN AUDIT: NEEDS FIXES — DO NOT START PROMPT 17"
+}

@@ -1,0 +1,28 @@
+Pre-Phase-17 consolidated audit test results
+Date: 2026-09-25
+Branch/commit baseline: main / 16b6543
+
+PASS  node --test tests/ui/*.test.mjs
+      26 passed, 0 failed
+
+PASS  .\.venv\Scripts\pytest.exe -p no:cacheprovider --basetemp=.pytest-consolidated-audit-final tests/integration/test_admin_api_prompt15.py tests/integration/test_admin_ui_api_prompt16b.py tests/integration/test_audit_security.py -q
+      32 passed, 0 failed
+
+FAIL  .\.venv\Scripts\pytest.exe -p no:cacheprovider --basetemp=.pytest-consolidated-audit-full tests -q
+      551 collected, 550 passed, 1 failed
+      Failure: tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt
+      Expected parsed French July deadline, observed None. This is outside Prompt 15/16 ownership; not changed.
+
+PASS  .\.venv\Scripts\ruff.exe check src/tender_intelligence/admin/auth.py tests/integration/test_admin_api_prompt15.py
+      All checks passed.
+
+WARN  Repository-wide `ruff check src tests`
+      94 findings in pre-existing files outside this task; no unrelated cleanup performed.
+
+PASS  git diff --check
+
+PASS  Worker dependency search: no Admin API/UI imports found under src/tender_intelligence/worker or orchestrator.
+
+Browser note: CUA inventory exposed no open browser tabs, so authenticated browser click-through and network-console inspection were not claimed. No real providers or email operations were invoked.
+
+Gate: CONSOLIDATED ADMIN AUDIT: NEEDS FIXES — DO NOT START PROMPT 17

@@ -1,0 +1,135 @@
+{
+  "report": "document-understanding-implementation",
+  "date": "2026-09-24",
+  "scope": "Multilingual document understanding — native PDF, scanned PDF, DOCX, ZIP, tables, EN/FR/PT",
+  "test_results": {
+    "overall": "PASS",
+    "suites": [
+      {"suite": "tests/unit/test_processing_docx.py", "result": "PASS"},
+      {"suite": "tests/unit/test_processing_tables.py", "result": "PASS"},
+      {"suite": "tests/unit/test_processing_pdf.py", "result": "PASS"},
+      {"suite": "tests/integration/test_processing_service.py", "result": "PASS"},
+      {"suite": "tests/unit/ (all other unit tests)", "result": "PASS"}
+    ],
+    "pre_existing_failures": [
+      {
+        "test": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt",
+        "reason": "Garbled Unicode in French date string — fails identically on baseline before changes",
+        "related_to_this_work": false
+      }
+    ]
+  },
+  "changes_implemented": [
+    {
+      "id": "ocr-multilingual-lang",
+      "file": "src/tender_intelligence/processing/service.py",
+      "class": "DocumentProcessingConfig",
+      "field": "ocr_lang",
+      "before": "\"eng\"",
+      "after": "\"eng+fra+por\"",
+      "rationale": "Tesseract combined model covers all three required portal languages in one OCR pass. Language detection happens after OCR from the resulting text, making pre-OCR language detection a circular dependency."
+    },
+    {
+      "id": "per-segment-language-field",
+      "file": "src/tender_intelligence/processing/representation.py",
+      "classes": ["ExtractedPage", "ExtractedSection"],
+      "field_added": "language: str | None = None",
+      "serialization": "to_dict and from_dict updated for both classes",
+      "fingerprint": "content_fingerprint updated to include language field on pages and sections",
+      "rationale": "Tender documents mix languages across pages/sections. Document-level language tag loses per-section signal needed for mixed-language ToRs."
+    },
+    {
+      "id": "per-segment-language-detection",
+      "file": "src/tender_intelligence/processing/service.py",
+      "functions_added": ["_tag_page_languages", "_tag_section_languages"],
+      "called_from": "_finalize",
+      "condition": "outcome.status == 'extracted'",
+      "rationale": "Populates language field on each page and section using existing detect_language(). Frozen dataclasses replaced (not mutated). Pages/sections below 20-token threshold keep language=None — correct, not a gap."
+    },
+    {
+      "id": "checksum-deduplication",
+      "file": "src/tender_intelligence/processing/service.py",
+      "stdlib_added": "hashlib",
+      "dedup_paths": [
+        {
+          "class": "TenderDocumentProcessor",
+          "method": "process / _process_path",
+          "mechanism": "sha256(data) computed per path; _seen dict keyed by checksum; duplicate paths return copy with new filename but prior content",
+          "scope": "DocumentProcessor.process() seam (storage-key interface)"
+        },
+        {
+          "class": "DocumentProcessingService",
+          "method": "process_tender",
+          "mechanism": "_seen_checksums dict keyed by snapshot.checksum; duplicate snapshots get re-stamped DocumentExtraction from prior; persisted and included in bundle",
+          "scope": "DB-backed tender processing loop"
+        }
+      ],
+      "duplicate_handling": "Duplicates still appear in bundle with original identity — never silently discarded",
+      "rationale": "ZIP expansion produces separate Document rows for identical files. Without dedup each is re-extracted, wasting OCR time and producing redundant artifacts."
+    }
+  ],
+  "components_validated_unchanged": [
+    {
+      "component": "Native PDF extraction",
+      "file": "src/tender_intelligence/processing/pdf.py",
+      "method": "pymupdf page.get_text, per-page, min 25 chars threshold"
+    },
+    {
+      "component": "Scanned PDF OCR",
+      "file": "src/tender_intelligence/processing/ocr.py",
+      "method": "TesseractOcrEngine, probe-at-init, per-page render→PNG→OCR"
+    },
+    {
+      "component": "PDF table extraction",
+      "file": "src/tender_intelligence/processing/pdf.py",
+      "method": "page.find_tables() strategy=lines, ruled-line detection, bbox preserved"
+    },
+    {
+      "component": "DOCX extraction",
+      "file": "src/tender_intelligence/processing/docx.py",
+      "method": "iter_inner_content document-order, heading detection, tables, core properties"
+    },
+    {
+      "component": "ZIP archive processing",
+      "file": "src/tender_intelligence/acquisition/zip.py",
+      "method": "safe_extract_archive, depth-2 recursion, bomb protection, per-member limits"
+    },
+    {
+      "component": "Language detection",
+      "file": "src/tender_intelligence/processing/languages.py",
+      "method": "Token-based stopword scoring, EN/FR/PT, 20-token minimum, 4% score minimum"
+    },
+    {
+      "component": "Table role classification",
+      "file": "src/tender_intelligence/processing/tables.py",
+      "method": "Trilingual vocabulary (EN/FR/PT), 5 roles, min 2 hits, header 2x weight"
+    },
+    {
+      "component": "Translation boundary",
+      "file": "src/tender_intelligence/processing/translation.py",
+      "method": "TranslationRecord explicitly records no-translation-available; no auto-translation"
+    },
+    {
+      "component": "Bundle assembly",
+      "file": "src/tender_intelligence/processing/service.py",
+      "method": "TenderDocumentBundle with languages list, per-document failure isolation"
+    }
+  ],
+  "requirements_coverage": {
+    "native_pdf": "COVERED",
+    "scanned_pdf_ocr": "COVERED",
+    "docx": "COVERED",
+    "zip_archives": "COVERED",
+    "tables": "COVERED",
+    "language_en": "COVERED",
+    "language_fr": "COVERED",
+    "language_pt": "COVERED",
+    "language_on_document_metadata": "COVERED",
+    "language_on_segment_metadata": "COVERED — implemented this session",
+    "no_silent_discard_non_english": "COVERED",
+    "no_auto_translation": "COVERED",
+    "per_document_failure_isolation": "COVERED",
+    "deduplication": "COVERED — implemented this session",
+    "no_rag": "N/A — not implemented (out of scope)"
+  }
+}

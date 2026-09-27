@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tender_intelligence.db.models.sources import Source
 from tender_intelligence.dedup.service import DedupService
+from tender_intelligence.interfaces.source import SourceType
 from tender_intelligence.orchestrator.registry import AdapterRegistry
 from tender_intelligence.orchestrator.scheduler import SourceSpec
 from tender_intelligence.sources.policy import CrawlPolicy
@@ -28,7 +29,7 @@ def test_two_paginated_sources_with_different_selectors_reach_dedup(
             '<article class="card"><a class="name" '
             'href="/tenders/tenders/101/list">Alpha opportunity</a></article>'
         ),
-        "https://beta.example/notices": (
+        "https://beta.example/notices?status=open": (
             '<li class="notice"><a class="notice-title" '
             'href="/tenders/tenders/202/list">Beta opportunity</a></li>'
         ),
@@ -49,6 +50,7 @@ def test_two_paginated_sources_with_different_selectors_reach_dedup(
                 **parser_defaults,
                 "row_selector": "article.card",
                 "title_selector": "a.name",
+                "detail_url_template": "/opportunity/{id}",
             },
             active=True,
         )
@@ -61,6 +63,8 @@ def test_two_paginated_sources_with_different_selectors_reach_dedup(
                 **parser_defaults,
                 "row_selector": "li.notice",
                 "title_selector": "a.notice-title",
+                "detail_url_template": "/tender/{id}",
+                "query_params": {"status": "open"},
             },
             active=True,
         )
@@ -73,13 +77,30 @@ def test_two_paginated_sources_with_different_selectors_reach_dedup(
         policy=CrawlPolicy(request_interval_seconds=0),
         fetcher=_FixtureFetcher(pages),
     )
-    candidates = [registry.build(spec).list_new_tenders() for spec in specs]
+    adapters = [registry.build(spec) for spec in specs]
+    candidates = [adapter.list_new_tenders() for adapter in adapters]
 
     assert [items[0].title for items in candidates] == [
         "Alpha opportunity",
         "Beta opportunity",
     ]
     assert [items[0].external_id for items in candidates] == ["101", "202"]
+    assert type(adapters[0]) is type(adapters[1])
+    assert adapters[0]._detail_url("101") == "https://alpha.example/opportunity/101"
+    assert adapters[1]._detail_url("202") == "https://beta.example/tender/202"
+    assert {
+        SourceType.PAGINATED_HTML.value,
+        SourceType.FILTERED_HTML.value,
+        SourceType.SEARCH_FORM.value,
+        SourceType.RSS_ATOM.value,
+        SourceType.JSON_API.value,
+    } == {
+        "paginated_html_list",
+        "filtered_html",
+        "search_form",
+        "rss_atom",
+        "json_api",
+    }
 
     dedup = DedupService(session_factory_gr)
     alpha_result = dedup.run(alpha_id, candidates[0])

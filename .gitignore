@@ -23,3 +23,16 @@ htmlcov/
 coverage.xml
 .neon
 node_modules/
+
+# Pytest custom basetemp directories (created by test runs with --basetemp)
+.pytest-*/
+
+# Object/blob storage runtime data
+objects/
+
+# AI agent and IDE tooling directories
+.claude/
+.kilo/
+
+# Package manager caches
+.uv-cache/

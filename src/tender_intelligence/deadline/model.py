@@ -102,7 +102,7 @@ class DeadlineResult:
         source_url: str | None = None,
         document_id: int | None = None,
         filename: str | None = None,
-    ) -> "DeadlineResult":
+    ) -> DeadlineResult:
         evidence: dict[str, Any] = {}
         if original_text:
             evidence["original_text"] = original_text[:EVIDENCE_TEXT_LIMIT]
@@ -126,7 +126,7 @@ class DeadlineResult:
         reason_code: str,
         *,
         extra: dict[str, Any] | None = None,
-    ) -> "DeadlineResult":
+    ) -> DeadlineResult:
         evidence: dict[str, Any] = {"reason_code": reason_code}
         if extra:
             evidence.update(extra)
@@ -143,7 +143,7 @@ class DeadlineResult:
         cls,
         conflict_a: dict[str, Any],
         conflict_b: dict[str, Any],
-    ) -> "DeadlineResult":
+    ) -> DeadlineResult:
         evidence: dict[str, Any] = {
             "reason_code": REASON_CONFLICTING_SOURCES,
             "conflict_a": conflict_a,

@@ -74,7 +74,7 @@ from tender_intelligence.mail.provider import (
 )
 from tender_intelligence.mail.sendlib import SENDLIB_FREE_CAPABILITIES, build_from_context
 from tender_intelligence.notifications import banner
-from tender_intelligence.notifications.contracts import NotificationEvent
+from tender_intelligence.notifications.contracts import NotificationEvent, NotificationOutcome
 from tender_intelligence.notifications.router import (
     RecipientRouter,
     RecipientSelection,
@@ -106,18 +106,6 @@ class NotificationError(Exception):
 
 class NotificationSafetyError(NotificationError):
     """Defence-in-depth: an unsafe business route was detected while Test Mode was ON."""
-
-
-@dataclass(frozen=True)
-class NotificationOutcome:
-    """Result of one notification call or dry-run preparation."""
-
-    status: str  # sent | already_notified | pending_retry | dry_run
-    notification_log_id: int | None = None
-    provider_used: str | None = None
-    possible_duplicate: bool = False
-    error_code: str | None = None
-    dedupe_key: str = ""
 
 
 @dataclass(frozen=True)

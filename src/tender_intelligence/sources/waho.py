@@ -1,4 +1,4 @@
-""":mod:`tender_intelligence.sources.waho` — WAHO Paginated HTML list adapter (docs/05 §5.3).
+""":mod:`tender_intelligence.sources.waho` — Paginated HTML list strategy (docs/05 §5.1, §5.3).
 
 Phase 1 implements the **discovery** half for the WAHO Tenders platform: crawl the
 configured listing pages (``prompts/04-waho-discovery.md``) and, per tender, parse the
@@ -6,10 +6,17 @@ detail page (``prompts/07-document-discovery.md``) into the neutral
 :class:`~tender_intelligence.interfaces.source.TenderDetail` / ``TenderAttachment``
 representations.
 
+:data:`SOURCE_TYPE` is ``paginated_html_list`` — the generic strategy of docs/05 §5.1 — and
+no branch of :class:`PaginatedHtmlAdapter` names a site. Every site difference (selectors,
+href pattern, detail URL template, next-page marker, query parameters, page cap) is read
+from ``parser_config``; WAHO is merely the configuration the defaults were derived from, so
+another paginated site is a new configuration row, not new code (PROJECT_RULES #10).
+``WahoPaginatedAdapter`` remains an alias for existing callers.
+
 The adapter is **stateless** with respect to seen state: it never queries the tender
-database, deduplicates, or persists anything (prompt 04 §3, §18; prompt 07 §6, §7).
-``get_detail``/``get_attachments`` are pure discovery — attachment bytes, checksums and
-``Document`` rows belong to prompts 08/09 via the Prompt 06 repository seam.
+database, deduplicates against persisted state, or persists anything (prompt 04 §3, §18;
+prompt 07 §6, §7). ``get_detail``/``get_attachments`` are pure discovery — attachment bytes,
+checksums and ``Document`` rows belong to prompts 08/09 via the Prompt 06 repository seam.
 
 Site specifics live in ``parser_config`` (prompt 04 §7, §9; prompt 07 §6), not in business
 logic. The defaults below encode the structure **established from the project's offline
@@ -35,9 +42,19 @@ from tender_intelligence.core.errors import PARSER_MISMATCH, SOURCE_UNREACHABLE
 from tender_intelligence.interfaces.source import (
     SourceAdapter,
     SourceError,
+    SourceType,
     TenderAttachment,
     TenderDetail,
     TenderListing,
+)
+from tender_intelligence.sources.normalize import (
+    RESPONSE_KIND_HTML,
+    absolute_url,
+    apply_query_params,
+    with_metadata,
+)
+from tender_intelligence.sources.normalize import (
+    selector_list as _selector_list,
 )
 from tender_intelligence.sources.policy import CrawlPolicy
 from tender_intelligence.sources.polite import Fetcher, HttpResponse, PoliteHttpClient
@@ -55,8 +72,14 @@ DEFAULT_PARSER_CONFIG: Final[dict[str, Any]] = {
     "title_selector": "div.card-header h5 a",
     #: ASSUMED from fixtures: detail link local path ``/tenders/tenders/{id}/list``.
     "detail_href_pattern": r"/tenders/tenders/(?P<id>\d+)/list",
+    "detail_url_template": "/tenders/tenders/{id}/list",
+    "query_params": {},
+    "detail_link_selector": None,
+    "reference_selector": None,
     #: ASSUMED from fixtures: next-page marker ``<a rel="next">`` on the listing page.
-    "next_page_selector": "a[rel=next]",
+    #: A list of selectors is accepted so one strategy covers sites that mark the next link
+    #: differently; a bare string stays valid configuration.
+    "next_page_selector": ["a[rel=next]"],
     "published_date_pattern": (
         r"Start Date:\s*(?P<raw>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?P<tz>UTC|GMT)"
     ),
@@ -94,6 +117,10 @@ DEFAULT_PARSER_CONFIG: Final[dict[str, Any]] = {
     ],
     #: Technical default; operator may override.
     "max_pages": 15,
+    #: Stop paginating as soon as a page contributes no listing the crawl has not already
+    #: seen. The generic strategy turns this on; a site that legitimately repeats rows on
+    #: every page can turn it off without code change.
+    "stop_when_no_new_items": True,
     "allow_empty_listing": False,
     "expected_languages": ["en", "fr", "pt"],
     #: Prompt 12.1 §8: LIVE-VERIFIED 2026-09-24 — detail page uses
@@ -111,6 +138,7 @@ DEFAULT_PARSER_CONFIG: Final[dict[str, Any]] = {
     "detail_body_selector": "div.card-body",
     #: Prompt 12.1 §8: LIVE-VERIFIED — attachments are in <ol> inside div.card-body.
     "attachment_block_selectors": ["div.card-body", "div.attachments", "#attachments"],
+    "attachment_link_selector": None,
     "attachment_path_markers": ["/uploads/", "/documents/", "/files/"],
     "document_extensions": (r"\.(?:pdf|docx?|xlsx?|pptx?|zip|rar|7z|od[tsp]|rtf|txt|csv)$"),
     "excluded_href_patterns": [
@@ -173,6 +201,9 @@ _TZ_OFFSETS: Final[dict[str, timezone]] = {
     "GMT": UTC,
     "UTC": UTC,
     "WAT": timezone(timedelta(hours=1)),
+    "CET": timezone(timedelta(hours=1)),
+    "CEST": timezone(timedelta(hours=2)),
+    "EAT": timezone(timedelta(hours=3)),
 }
 
 _MONTHS: Final[dict[str, int]] = {
@@ -280,10 +311,14 @@ _SIZE_UNITS: Final[dict[str, int]] = {
 }
 
 
-class WahoPaginatedAdapter(SourceAdapter):
-    """WAHO tenders platform — Paginated HTML list source (docs/05 §5.3)."""
+class PaginatedHtmlAdapter(SourceAdapter):
+    """Configuration-driven adapter for paginated HTML tender sites.
 
-    source_type: str = SOURCE_TYPE
+    Defaults preserve WAHO behavior; other sites provide their own selectors and URL rules
+    through ``parser_config``.
+    """
+
+    source_type: str = SourceType.PAGINATED_HTML.value
 
     def __init__(
         self,
@@ -312,17 +347,51 @@ class WahoPaginatedAdapter(SourceAdapter):
     def list_new_tenders(self) -> list[TenderListing]:
         """Crawl the configured listing pages and return normalised candidates.
 
-        Never consults the database, never deduplicates, never writes, never emails
-        (prompt 04 §3, §18).
+        Never consults the database, never deduplicates against persisted state, never
+        writes, never emails (prompt 04 §3, §18).
+        """
+        return self._crawl(self._listing_url, {})
+
+    def _start_url(self, extra_params: dict[str, Any] | None = None) -> str:
+        """The first URL of a crawl: the listing URL with its configured query parameters.
+
+        A subclass that has to recognise the first request — the search-form strategy does,
+        because its first response comes from a form submission rather than from this URL —
+        derives the same value here instead of repeating the merge rule.
+        """
+        base_params = self._config.get("query_params") or {}
+        return apply_query_params(self._listing_url, {**base_params, **(extra_params or {})})
+
+    def _crawl(self, start_url: str, extra_params: dict[str, Any]) -> list[TenderListing]:
+        """Follow the configured next-page chain from *start_url* and return unique listings.
+
+        Three independent stops keep a misbehaving site bounded: the configured
+        ``max_pages`` cap, the visited-URL set (a next link pointing backwards ends the
+        crawl), and ``stop_when_no_new_items`` (a page that contributes nothing new is the
+        last page worth fetching). Listings are deduplicated by ``external_id`` on the way
+        out, so a site that re-lists the same tender on two pages yields it once — the
+        pipeline's ``(source_id, external_id)`` dedupe still decides what is genuinely *new*
+        (prompt 05).
+
+        *extra_params* is merged on top of the configured ``query_params`` for every request
+        in the chain. The filtered strategy uses it to walk one facet at a time.
         """
         correlation_id = get_correlation_id()
-        max_pages = int(self._config.get("max_pages") or self._policy.max_pages)
-        url: str | None = self._listing_url
+        base_params = self._config.get("query_params") or {}
+        url: str | None = start_url
         visited: set[str] = set()
         discovered: list[TenderListing] = []
+        seen_ids: set[str] = set()
+        max_pages = int(self._config.get("max_pages") or self._policy.max_pages)
+        stop_when_no_new = bool(self._config.get("stop_when_no_new_items", True))
         page_number = 0
+        terminated_by = "no_next_page"
 
-        while url and url not in visited and page_number < max_pages:
+        while url and page_number < max_pages:
+            url = apply_query_params(url, {**base_params, **extra_params})
+            if url in visited:
+                terminated_by = "already_visited_url"
+                break
             visited.add(url)
             page_number += 1
             log.info(
@@ -339,6 +408,7 @@ class WahoPaginatedAdapter(SourceAdapter):
             if (
                 not page_listings
                 and page_number == 1
+                and not extra_params
                 and not self._config.get("allow_empty_listing")
             ):
                 raise SourceError(
@@ -346,13 +416,23 @@ class WahoPaginatedAdapter(SourceAdapter):
                     error_code=PARSER_MISMATCH,
                     context={"url": url, "correlation_id": correlation_id},
                 )
-            discovered.extend(page_listings)
+            fresh = [item for item in page_listings if item.external_id not in seen_ids]
+            seen_ids.update(item.external_id for item in fresh)
+            discovered.extend(fresh)
             url = next_url
+            if stop_when_no_new and page_number > 1 and not fresh:
+                # The site is repeating rows it has already shown (or page 2 was empty):
+                # further pages would be fetched to be discarded, so the crawl stops here.
+                terminated_by = "no_new_items"
+                break
 
+        if page_number >= max_pages and url:
+            terminated_by = "max_pages_reached"
         log.info(
-            "discovery complete: %d candidates from %d page(s)",
+            "discovery complete: %d unique candidate(s) from %d page(s), stopped: %s",
             len(discovered),
             page_number,
+            terminated_by,
             extra={"stage": "discovery", "status": "done", "correlation_id": correlation_id},
         )
         return discovered
@@ -423,7 +503,9 @@ class WahoPaginatedAdapter(SourceAdapter):
         title_el = row.select_one(self._config["title_selector"])
         if title_el is None:
             return None
-        href = str(title_el.get("href", ""))
+        link_selector = self._config.get("detail_link_selector") or self._config["title_selector"]
+        link_el = row.select_one(link_selector)
+        href = str((link_el or title_el).get("href", ""))
         match = re.search(self._config["detail_href_pattern"], href)
         if not match:
             log.warning(
@@ -432,31 +514,50 @@ class WahoPaginatedAdapter(SourceAdapter):
             )
             return None
         external_id = match.group("id")
-        detail_url = urllib.parse.urljoin(page_url, href)
+        detail_url = absolute_url(page_url, href)
+        if not detail_url:
+            log.warning(
+                "listing row with an unusable detail link",
+                extra={"stage": "discovery", "status": "warning", "href": href},
+            )
+            return None
         title = title_el.get_text(" ", strip=True)
 
         card_text = row.get_text(" ", strip=True)
         published_at, published_raw = self._parse_published(card_text)
         deadline_at, deadline_tz, deadline_raw = self._parse_deadline(card_text)
 
+        reference_selector = self._config.get("reference_selector")
+        reference_element = row.select_one(reference_selector) if reference_selector else None
+        reference = (
+            reference_element.get_text(" ", strip=True)
+            if reference_element is not None
+            else self._reference_number(card_text)
+        )
         raw_metadata: dict[str, Any] = {
             "language": self._guess_language(card_text),
-            "reference": self._reference_number(card_text),
             "listing_page_url": page_url,
         }
+        if reference:
+            raw_metadata["reference"] = reference
         if published_raw:
             raw_metadata["published_raw"] = published_raw
         if deadline_raw:
             raw_metadata["deadline_raw"] = deadline_raw
 
-        return TenderListing(
-            external_id=external_id,
-            title=title,
-            url=detail_url,
-            published_at=published_at,
-            deadline_at=deadline_at,
-            deadline_timezone=deadline_tz,
-            raw_metadata=raw_metadata,
+        return with_metadata(
+            TenderListing(
+                external_id=external_id,
+                title=title,
+                url=detail_url,
+                published_at=published_at,
+                deadline_at=deadline_at,
+                deadline_timezone=deadline_tz,
+                raw_metadata=raw_metadata,
+            ),
+            response_kind=RESPONSE_KIND_HTML,
+            discovery_url=page_url,
+            identity_source="detail_href_pattern",
         )
 
     def _parse_published(self, card_text: str) -> tuple[datetime | None, str | None]:
@@ -544,14 +645,22 @@ class WahoPaginatedAdapter(SourceAdapter):
         return None, None, None
 
     def _next_page_url(self, soup: BeautifulSoup, page_url: str) -> str | None:
-        selector = self._config["next_page_selector"]
-        link = soup.select_one(selector)
-        if link is None:
-            return None
-        href = str(link.get("href") or "")
-        if not href:
-            return None
-        return urllib.parse.urljoin(page_url, href)
+        """The next listing page advertised by *soup*, or ``None`` at the end of the list.
+
+        Selectors are tried in configured order so a site that uses more than one pagination
+        marker needs no code change. A "next" link pointing at a page already crawled is not
+        filtered here — :meth:`list_new_tenders`'s visited set is the single loop guard, so
+        there is only one thing to reason about when a site paginates oddly.
+        """
+        for selector in _selector_list(self._config["next_page_selector"]):
+            link = soup.select_one(selector)
+            if link is None:
+                continue
+            href = str(link.get("href") or "").strip()
+            if not href:
+                continue
+            return absolute_url(page_url, href)
+        return None
 
     @staticmethod
     def _reference_number(card_text: str) -> str | None:
@@ -559,6 +668,12 @@ class WahoPaginatedAdapter(SourceAdapter):
         return match.group(1) if match else None
 
     def _guess_language(self, card_text: str) -> str:
+        """Best-guess language from substring hints.
+
+        Returns any detected language code, not limited to EN/FR/PT.
+        Falls back to "en" when no hints match (conservative default for
+        English-language tender portals).
+        """
         lowered = card_text.lower()
         fr_hits = sum(1 for hint in _FRENCH_HINTS if hint in lowered)
         pt_hits = sum(1 for hint in _PORTUGUESE_HINTS if hint in lowered)
@@ -635,8 +750,15 @@ class WahoPaginatedAdapter(SourceAdapter):
         return attachments
 
     def _detail_url(self, tender_id: str) -> str:
-        url = urllib.parse.urljoin(self._base_url, f"/tenders/tenders/{tender_id}/list")
-        return url
+        template = self._config.get("detail_url_template")
+        if not template:
+            raise SourceError(
+                "source has no detail_url_template configured",
+                error_code=PARSER_MISMATCH,
+                context={"source_type": self.source_type},
+            )
+        path = str(template).format(id=urllib.parse.quote(str(tender_id), safe=""))
+        return urllib.parse.urljoin(self._base_url, path)
 
     def _parse_detail(self, response: HttpResponse, tender_id: str) -> TenderDetail:
         soup = BeautifulSoup(response.text, "html.parser")
@@ -767,7 +889,17 @@ class WahoPaginatedAdapter(SourceAdapter):
         containers = self._attachment_containers(soup)
 
         attachments: list[TenderAttachment] = []
-        for link in soup.find_all("a", href=True):
+        link_selector = self._config.get("attachment_link_selector")
+        links = (
+            [
+                link
+                for container in soup.select(link_selector)
+                for link in container.select("a[href]")
+            ]
+            if link_selector
+            else soup.find_all("a", href=True)
+        )
+        for link in links:
             href = str(link.get("href", ""))
             if self._is_excluded_link(href, link, excluded):
                 continue
@@ -812,6 +944,13 @@ class WahoPaginatedAdapter(SourceAdapter):
         if rel and "next" in [str(r).lower() for r in rel]:
             return True
         stripped = href.strip()
+        # Reject hrefs that contain non-ASCII characters (e.g. degree symbols U+00B0
+        # introduced by the WAHO CMS as trailing garbage). Non-ASCII bytes in a raw
+        # href attribute are not valid URL syntax; joining them against a page URL
+        # produces a corrupted source_url that can never be successfully fetched.
+        # This is the first boundary where the malformed value can be intercepted.
+        if not stripped.isascii():
+            return True
         return any(pattern.search(stripped) for pattern in excluded)
 
     def _is_document_link(
@@ -917,3 +1056,7 @@ class WahoPaginatedAdapter(SourceAdapter):
                 continue
             break
         return wrappers
+
+
+# Backward-compatible name retained for existing WAHO callers and tests.
+WahoPaginatedAdapter = PaginatedHtmlAdapter

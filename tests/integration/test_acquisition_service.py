@@ -270,6 +270,96 @@ class TestZipAcquisition:
         rows = _rows(session_factory_gr, 4)
         assert rows[0].download_status == "failed"
 
+    def test_nested_archives_are_recursed_to_the_configured_depth(
+        self, session_factory_gr, tmp_storage
+    ) -> None:
+        """Prompt 08 §10 — a tender bundle nested inside a ZIP must still reach the pipeline.
+
+        The document at the bottom is the point: if the inner archive were retained as an opaque
+        blob, the nested tender document would never become a ``Document`` row and would silently
+        never be extracted at all. The chain length is derived from the configured limit so the test
+        states the *rule* rather than a magic number that a limit change would silently invalidate.
+        """
+        limits = ZipLimits()
+        spec_pdf = text_pdf(["tender specification"])
+        payload = b"nested tender notes"
+
+        # A chain of exactly as many archive levels as the limit permits, with the document at the
+        # bottom. The top-level archive counts as level 1, so this is max_nested_depth - 1
+        # wrappings.
+        chain = {"spec.pdf": spec_pdf, "notes.txt": payload}
+        for level in range(limits.max_nested_depth - 1):
+            chain = {f"level{level}.zip": zip_bytes(chain)}
+
+        site = DownloadSite(attachments={"bundle": (zip_bytes(chain), "application/zip")})
+        service, _ = _make_service(session_factory_gr, str(tmp_storage), site)
+
+        result = service.acquire(
+            6,
+            [TenderAttachment(source_url="https://src.example/t6/bundle", filename="bundle.zip")],
+        )
+
+        assert not result.failures
+        by_name = {document.filename: document for document in result.documents}
+        # The deepest PDF is present as its own row, with its own checksum.
+        assert "spec.pdf" in by_name
+        assert by_name["spec.pdf"].is_archive_inner is True
+        assert by_name["spec.pdf"].checksum == checksum_of(spec_pdf)
+        assert "notes.txt" in by_name
+
+    def test_recursion_beyond_the_depth_limit_is_bounded_not_unbounded(
+        self, session_factory_gr, tmp_storage
+    ) -> None:
+        """The depth limit must *stop* the recursion, not merely be documented.
+
+        One level past the limit the archive is retained as an ordinary document: it is not
+        unpacked, and it is not dropped either, so the fact that it could not be descended into
+        stays visible rather than vanishing.
+        """
+        limits = ZipLimits()
+        chain = {"bottom.txt": b"too deep"}
+        for level in range(limits.max_nested_depth):
+            chain = {f"level{level}.zip": zip_bytes(chain)}
+
+        site = DownloadSite(attachments={"bundle": (zip_bytes(chain), "application/zip")})
+        service, _ = _make_service(session_factory_gr, str(tmp_storage), site)
+
+        result = service.acquire(
+            7,
+            [TenderAttachment(source_url="https://src.example/t7/bundle", filename="bundle.zip")],
+        )
+
+        assert not result.failures
+        names = {document.filename for document in result.documents}
+        # Unpacking stopped at the limit; nothing below it became a row.
+        assert "bottom.txt" not in names
+        assert f"level{limits.max_nested_depth - 1}.zip" in names, (
+            "the archive past the limit is kept as a document rather than discarded"
+        )
+
+    def test_a_nested_archive_failure_does_not_lose_its_siblings(
+        self, session_factory_gr, tmp_storage
+    ) -> None:
+        inner = zip_bytes({"good.txt": b"ok"})
+        outer = zip_bytes(
+            {
+                "broken.zip": b"this member is not a usable zip despite its name",
+                "inner.zip": inner,
+                "readme.txt": b"top level",
+            }
+        )
+        site = DownloadSite(attachments={"bundle": (outer, "application/zip")})
+        service, _ = _make_service(session_factory_gr, str(tmp_storage), site)
+
+        result = service.acquire(
+            8,
+            [TenderAttachment(source_url="https://src.example/t8/bundle", filename="bundle.zip")],
+        )
+
+        names = {document.filename for document in result.documents}
+        assert "good.txt" in names, "a sibling member must survive a bad nested archive"
+        assert "readme.txt" in names
+
 
 class TestFailureTolerance:
     def test_five_document_fixture_isolates_failure(

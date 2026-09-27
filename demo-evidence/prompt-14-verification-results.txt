@@ -1,0 +1,16 @@
+Prompt 14 independent behavioral verification test results
+Repository HEAD: 16b654383a0f6633f8eeaea4bc0bbe9b098bc883
+
+Command: .venv\Scripts\python.exe -m pytest -q -r a -p no:cacheprovider --basetemp=.pytest-p14-independent tests/integration/test_verdict_engine.py
+Result: 8 passed, 0 failed.
+
+Command: .venv\Scripts\python.exe -m pytest -q -r a -p no:cacheprovider --basetemp=.pytest-p14-regression tests/integration/test_deadline_resolution.py tests/unit/test_deadline_model.py tests/unit/test_deadline_service.py tests/unit/test_deadline_waho_parser.py tests/integration/test_triage_service.py tests/integration/test_orchestrator_pipeline.py tests/integration/test_notification_service.py
+Result: selected tests passed except 1 failure: tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt. Expected a parsed deadline, got None for replacement-character French text.
+
+Command: .venv\Scripts\python.exe -m pytest -q -r a -p no:cacheprovider --basetemp=.pytest-p14-full
+Result: 619 collected; 618 passed; 1 failed. Same WAHO French deadline parser failure.
+
+Implementation state: no source/test/config/migration files changed by this verification. Stage B integration tests use mocks; no live LLM or mail calls; no business emails sent.
+Coordinator behavior: when `verdict_handoff` is not configured, Stage B is recorded as skipped (`no Stage B engine configured`), so the default full pipeline does not execute Stage B.
+
+PROMPT 14: NEEDS FIXES

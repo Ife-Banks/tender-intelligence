@@ -10,23 +10,16 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import StrEnum
 from html import escape
 from typing import Any
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from tender_intelligence.notifications.contracts import NotificationKind
 from tender_intelligence.notifications.test_mode import TEST_PREFIX, has_test_prefix
 
 WAT = ZoneInfo("Africa/Lagos")
 _DEADLINE_FMT = "%Y-%m-%d %H:%M %Z"
-
-
-class NotificationKind(StrEnum):
-    """Whether this notification reports a new tender or an update."""
-
-    NEW = "new"
-    UPDATE = "update"
 
 
 @dataclass(frozen=True)

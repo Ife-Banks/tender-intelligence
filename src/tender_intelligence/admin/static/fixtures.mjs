@@ -69,7 +69,7 @@ export const FIXTURE_DATA = {
   "/recipients": { items: [
     { id: 1, email: "tender-demo@example.test", name: "Tender Demo", role: "Operations", list_type: "tender", delivery: "to", receives_filter: "all", active: true },
     { id: 2, email: "dev-demo@example.test", name: "Development Demo", role: "QA", list_type: "dev_alert", delivery: "to", min_severity: "warning", alert_types: ["worker_failure"], active: true },
-    { id: 3, email: "viewer-demo@example.test", name: "Read Only Demo", role: "Viewer", list_type: "tender", delivery: "cc", receives_filter: "urgent", active: true },
+    { id: 3, email: "reviewer-demo@example.test", name: "Tender Reviewer Demo", role: "Tender reviewer", list_type: "tender", delivery: "cc", receives_filter: "urgent", active: true },
   ] },
   "/mail/providers": { items: [
     { id: 1, name: "Sendlib fixture", provider_type: "sendlib", priority: 1, active: true, capabilities: { html: true, attachments: true }, breaker_state: "open", credentials_configured: true, from_address: "not-a-real-sender@example.test", reply_to: "" },

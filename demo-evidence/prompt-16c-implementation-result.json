@@ -1,0 +1,55 @@
+{
+  "prompt": "16C",
+  "title": "Authentication Scope Removal & Admin Access Simplification",
+  "status": "IMPLEMENTED",
+  "authentication": {
+    "application_login": "deferred",
+    "production_identity_provider": "not_configured",
+    "blocking": false
+  },
+  "admin_ui": {
+    "login_required": false,
+    "dev_auth_required": false
+  },
+  "admin_api": {
+    "application_auth_required": false
+  },
+  "safety_controls_preserved": true,
+  "test_mode_preserved": true,
+  "secret_safety_preserved": true,
+  "audit_preserved": true,
+  "worker_independence_preserved": true,
+  "prompt_17_started": false,
+  "prompt_18_started": false,
+  "prompt_19_started": false,
+  "tests": {
+    "full_python": {
+      "collected": 619,
+      "passed": 618,
+      "failed": 1,
+      "known_failure": "tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt"
+    },
+    "admin_integration": {
+      "run": 19,
+      "passed": 19,
+      "failed": 0
+    },
+    "ui_node": {
+      "run": 26,
+      "passed": 26,
+      "failed": 0
+    },
+    "ruff": "passed",
+    "node_syntax": "passed"
+  },
+  "known_regressions": [
+    "Existing WAHO French July/GMT deadline parser fixture fails; not caused or changed by 16C."
+  ],
+  "verification_debt": [
+    "Prompt 14 independent verification gaps remain.",
+    "Prompt 15 independent verification gaps remain.",
+    "Prompt 16A independent verification gaps remain.",
+    "Prompt 16B independent verification gaps remain.",
+    "Prompt 16C independent verification has not yet been performed."
+  ]
+}

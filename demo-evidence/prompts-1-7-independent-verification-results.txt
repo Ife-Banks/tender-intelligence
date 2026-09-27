@@ -1,0 +1,76 @@
+INDEPENDENT VERIFICATION RESULTS — PROMPTS 1–7
+===============================================
+Date:        2026-09-24
+Verified by: Independent Verification Engineer (read-only)
+Commit:      16b6543 (HEAD -> main) admin api and ui configured
+Mode:        READ-ONLY — no product code, tests, or configuration modified
+
+PROMPT RESULTS
+--------------
+Prompt 1  Source Adapter Architecture & Pluggability    PASS
+Prompt 2  Source Type Strategies                        PASS
+Prompt 3  Notification Channel Architecture             PARTIAL
+Prompt 4  Multilingual Document Understanding           PASS
+Prompt 5  Knowledge Base & Retrieval Layer              PASS
+Prompt 6  Stage B Requirement Completeness & Evidence   PASS
+Prompt 7  Configuration & Admin Extensibility           PARTIAL
+
+REQUIREMENT COUNTS
+------------------
+Total:       46
+PASS:        43
+PARTIAL:      3
+FAIL:         0
+BLOCKED:      0
+UNVERIFIED:   0
+N/A:          0
+
+TEST RESULTS
+------------
+Unit tests (excl. known regression):   507 collected, 507 passed, 0 failed
+Unit tests (incl. known regression):   508 collected, 507 passed, 1 failed
+Verdict engine integration:             12 collected,  12 passed, 0 failed
+Processing service integration:          8 collected,   8 passed, 0 failed
+Source extensibility integration:        1 collected,   1 passed, 0 failed
+Admin API integration:                  18 collected,  18 passed, 0 failed
+Orchestrator Stage B subset:            10 collected,  10 passed, 0 failed
+Full integration suite:                TIMED OUT (too slow for 3-min limit)
+
+CRITICAL BLOCKERS
+-----------------
+A  Generic source architecture           CLEARED
+B  Source strategy coverage              CLEARED
+C  Document processing                   CLEARED
+D  KB retrieval                          CLEARED
+E  Requirement completeness              CLEARED
+F  Normal worker Stage B wiring          CLEARED  *** Previous known blocker — now resolved ***
+G  Configuration extensibility           CLEARED
+H  Safety regression                     CLEARED
+
+OPEN DEFECTS (non-blocking)
+----------------------------
+D1 [P3/MEDIUM] NotificationChannel abstraction not yet wired into pipeline coordinator
+   Evidence: channels.py: "pipeline has not yet connected notification sending to coordinator"
+D2 [P7/LOW]   Per-source recipient scoping not independently verified
+
+KNOWN SEPARATE REGRESSION (not caused by Prompts 1–7)
+------------------------------------------------------
+KNOWN EXISTING DEADLINE REGRESSION — PROMPT 12.1 OWNERSHIP
+  test: tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt
+  cause: Garbled Unicode box characters in French date string fixture
+  pre-existing: YES
+
+REMEDIATION ORDER
+-----------------
+1. Wire NotificationDispatcher into RunCoordinator   [P3, D1, MEDIUM]
+2. Verify/test per-source recipient scoping          [P7, D2, LOW]
+3. Resolve French WAHO deadline parser regression    [Prompt 12.1, separate ownership]
+
+FINAL GATE
+----------
+PROMPTS 1–7: VERIFICATION OPEN — REMEDIATION REQUIRED
+
+Reason: P3 (notification channel not wired into pipeline) and P7 (per-source recipient
+scoping unverified) are PARTIAL. All 8 critical blockers are cleared, including the
+previously known Blocker F (Stage B not wired in headless worker) which is now confirmed
+resolved. No prompt is FAIL or BLOCKED.

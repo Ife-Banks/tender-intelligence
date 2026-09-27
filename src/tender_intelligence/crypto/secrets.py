@@ -39,11 +39,20 @@ def get_master_key() -> bytes:
     """
     encoded = os.environ.get(SECRET_ENV_VAR)
     if not encoded:
+        # BaseSettings reads .env without mutating os.environ. Use the same loaded
+        # configuration as the app so file-based development secrets work as expected.
+        from tender_intelligence.config.settings import get_env_settings
+
+        encoded = get_env_settings().master_key
+    if not encoded:
         raise SecretError(f"{SECRET_ENV_VAR} is not set; cannot encrypt/decrypt secrets")
     try:
-        return base64.b64decode(encoded, validate=True)
+        key = base64.b64decode(encoded, validate=True)
     except Exception as exc:  # binascii.Error / ValueError
         raise SecretError(f"{SECRET_ENV_VAR} is not valid base64") from exc
+    if len(key) != 32:
+        raise SecretError(f"{SECRET_ENV_VAR} must decode to exactly 32 bytes")
+    return key
 
 
 def encrypt_secret(plaintext: str, key: bytes | None = None) -> str:

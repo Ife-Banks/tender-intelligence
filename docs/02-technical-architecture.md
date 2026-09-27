@@ -44,7 +44,7 @@ flowchart TD
 - Responsibilities (confirmed screens in v1.1 §5.11): health dashboard, sources, tenders/timelines, knowledge base, LLM providers, recipients, mail providers, triage & urgency, settings, audit log.
 - **Does not run crawls inline.** "Test this source" and "Test connection" are **dry runs** that write nothing to the seen-tenders table and send nothing to business recipients.
 - If the admin app is down, the worker keeps running on the last saved configuration.
-- Requires authenticated users; two roles (Admin, Viewer) are **[PROPOSED]**; exposure of KB/secrets to viewers is prohibited.
+- Application-level login is intentionally deferred for the current internal-tool version; UI/API do not require an application session. Keep deployment internal/private; this is not approval for public exposure. Credential secrets remain write-only and server-side.
 - *[Proposed implementation choice]*: the admin web stack is not specified by the source; it may differ from the worker language as long as they share the database and schema.
 
 ## 2.4 Shared relational database

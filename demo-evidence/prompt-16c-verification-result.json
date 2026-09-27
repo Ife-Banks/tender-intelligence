@@ -1,0 +1,81 @@
+{
+  "prompt": "16C",
+  "verification": "independent",
+  "status": "NEEDS_FIXES",
+  "authentication": {
+    "application_login_required": false,
+    "production_idp_required": false,
+    "dev_auth_required": false,
+    "dev_auth_query_ignored": true
+  },
+  "admin_ui": {
+    "loads_without_login": true,
+    "login_redirect_absent": true,
+    "all_navigation_present": true,
+    "live_health_rendered": true,
+    "tenders_screen_operational": false
+  },
+  "admin_api": {
+    "application_auth_required": false,
+    "obsolete_401_gate_absent": true,
+    "representative_reads_all_successful": false,
+    "live_http_status": {
+      "/health": 200,
+      "/api/v1/sources/supported-types": 200,
+      "/api/v1/sources": 200,
+      "/api/v1/tenders": 500,
+      "/api/v1/settings": 200,
+      "/api/v1/triage": 200,
+      "/api/v1/llm/profiles": 200,
+      "/api/v1/llm/roles": 200,
+      "/api/v1/llm/usage": 500,
+      "/api/v1/recipients": 200,
+      "/api/v1/mail/providers": 200,
+      "/api/v1/knowledge-base/versions": 200,
+      "/api/v1/audit": 200,
+      "/api/v1/health/dashboard": 200
+    }
+  },
+  "safety": {
+    "test_mode_preserved": true,
+    "secret_safety_preserved": true,
+    "audit_preserved": true,
+    "dry_run_preserved": true,
+    "worker_independence_preserved": true,
+    "no_business_email_sent": true
+  },
+  "configuration": {
+    "obsolete_auth_env_required": false,
+    "dotenv_ignored_by_git": true
+  },
+  "prompt_17_started": false,
+  "known_failures": [
+    "Unrelated known WAHO parser test: tests/unit/test_deadline_waho_parser.py::TestFrenchDeadlinePatterns::test_date_limite_july_gmt (full suite 618 passed, 1 failed)."
+  ],
+  "tests": {
+    "focused_admin": {"run": 20, "passed": 20, "failed": 0},
+    "ui_node": {"run": 26, "passed": 26, "failed": 0},
+    "worker_and_service_integration": {"run": 54, "passed": 54, "failed": 0},
+    "full_pytest": {"run": 619, "passed": 618, "failed": 1}
+  },
+  "findings": [
+    {
+      "id": "F16C-01",
+      "severity": "HIGH",
+      "area": "Live Admin API/runtime",
+      "owner": "Prompt 15 or runtime/database configuration; not attributed to Prompt 16C",
+      "endpoints": ["GET /api/v1/tenders", "GET /api/v1/llm/usage"],
+      "observed": "Both return 500 internal_error without an authentication challenge; isolated migrated-database tests return 200.",
+      "recommended_action": "Diagnose current live API/database state before relying on these Admin screens."
+    },
+    {
+      "id": "F16C-02",
+      "severity": "MEDIUM",
+      "area": "Admin UI forbidden-state copy",
+      "owner": "Prompt 16C UI cleanup",
+      "file": "src/tender_intelligence/admin/static/app.mjs",
+      "observed": "403 panel directs the operator to have an administrator review their account role even though app identity and roles are deferred.",
+      "recommended_action": "Use neutral deployment/network policy guidance for 403."
+    }
+  ]
+}

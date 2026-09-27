@@ -52,7 +52,13 @@ class ZipLimits:
     max_compression_ratio: int = 200
     max_single_member_bytes: int = 256 * 1024 * 1024  # 256 MiB per member
     max_name_length: int = 255
-    max_nested_depth: int = 2  # top-level archive = depth 1; recurse up to depth + max
+
+    #: How many archive levels are *opened*, counting the top-level archive as level 1. A nested
+    #: member is descended into while its depth is within this limit; one past it is retained as an
+    #: ordinary acquired document instead of being unpacked. So the default opens the top archive
+    #: and one level of nesting, and the field is an absolute level count rather than a count of
+    #: *nested* levels — the name says "depth", the behaviour is "levels opened".
+    max_nested_depth: int = 2
 
 
 @dataclass(frozen=True)

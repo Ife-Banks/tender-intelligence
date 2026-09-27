@@ -40,6 +40,7 @@ rather than duplicate artifacts.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import zipfile
@@ -85,6 +86,10 @@ from tender_intelligence.processing.representation import (
     TenderDocumentBundle,
 )
 from tender_intelligence.processing.store import ExtractionStore
+from tender_intelligence.processing.translation import (
+    TranslationBoundary,
+    build_translation_record,
+)
 from tender_intelligence.processing.versions import (
     EXTRACTION_CONFIG_VERSION,
     PROCESSOR_NAME,
@@ -186,7 +191,13 @@ class DocumentProcessingConfig:
     config_version: str = EXTRACTION_CONFIG_VERSION
     render_dpi: int = DEFAULT_RENDER_DPI
     min_native_chars_per_page: int = MIN_NATIVE_TEXT_CHARS_PER_PAGE
-    ocr_lang: str = "eng"
+    #: Tesseract language model(s) used for OCR pages.  The initial acceptance-test languages
+    #: (EN/FR/PT) are combined so that a scanned French or Portuguese annex is OCR'd correctly
+    #: without needing a separate per-document language probe (which would require OCR first —
+    #: a circular dependency). Tesseract accepts ``+``-joined codes; ``eng+fra+por`` activates
+    #: all three simultaneously. Additional languages can be added by changing this value
+    #: (e.g., ``eng+fra+por+deu+spa``) without code changes.
+    ocr_lang: str = "eng+fra+por"
     reuse_extractions: bool = True
 
 
@@ -243,6 +254,7 @@ class ExtractionOutcome:
     skip_reason: str | None = None
     ocr_engine: str | None = None
     ocr_engine_version: str | None = None
+    document_metadata: dict[str, str] = field(default_factory=dict)
 
 
 def _utcnow_iso() -> str:
@@ -276,16 +288,27 @@ class TenderDocumentProcessor(DocumentProcessor):
 
         A key that cannot be read or extracted is recorded on its ``ExtractedDocument`` with an
         error code rather than raising, so one bad file never blocks the rest (docs/06 §6.4).
+
+        Identical bytes that appear under more than one path are extracted once and their result
+        re-used for the duplicates.  This is the common case when a ZIP archive is expanded and
+        one member appears under multiple names in the tender portal.
         """
         documents: list[ExtractedDocument] = []
+        # checksum → first-seen ExtractedDocument; used to skip identical bytes a second time.
+        _seen: dict[str, ExtractedDocument] = {}
         for path in document_paths:
-            documents.append(self._process_path(path))
+            documents.append(self._process_path(path, _seen=_seen))
         return DocumentBundle(
             documents=documents,
             incomplete_inputs=any(document.error_code is not None for document in documents),
         )
 
-    def _process_path(self, path: str) -> ExtractedDocument:
+    def _process_path(
+        self,
+        path: str,
+        *,
+        _seen: dict[str, ExtractedDocument] | None = None,
+    ) -> ExtractedDocument:
         filename = path.rsplit("/", 1)[-1]
         try:
             data = self._storage.get(path)
@@ -301,6 +324,37 @@ class TenderDocumentProcessor(DocumentProcessor):
                 error_code=DOCUMENT_DOWNLOAD_FAILED,
             )
 
+        # Deduplicate identical bytes within this bundle call.  A ZIP expanded by acquisition
+        # can contain the same file under different names; re-extracting it wastes work and
+        # inflates the bundle with redundant entries.  The checksum is recorded on the returned
+        # document regardless of whether it was a cache hit.
+        checksum = hashlib.sha256(data).hexdigest()
+        if _seen is not None and checksum in _seen:
+            prior = _seen[checksum]
+            log.debug(
+                "skipping duplicate document bytes",
+                extra={
+                    "stage": "processing",
+                    "path": path,
+                    "duplicate_of": prior.filename,
+                    "checksum": checksum,
+                },
+            )
+            # Return a new ExtractedDocument with this path's filename but the prior result's
+            # content — the bytes are identical so the extraction would be the same.
+            return ExtractedDocument(
+                filename=filename,
+                source_url="",
+                mime_type=None,
+                language=prior.language,
+                checksum=checksum,
+                extraction_method=prior.extraction_method,
+                text=prior.text,
+                pages=list(prior.pages),
+                tables=list(prior.tables),
+                error_code=prior.error_code,
+            )
+
         outcome = self._extract(
             data,
             filename=filename,
@@ -312,18 +366,21 @@ class TenderDocumentProcessor(DocumentProcessor):
             detected, _confidence = detect_language(outcome.text)
             language = detected
 
-        return ExtractedDocument(
+        result = ExtractedDocument(
             filename=filename,
             source_url="",
             mime_type=None,
             language=language,
-            checksum=_checksum_hint(path),
+            checksum=checksum,
             extraction_method=outcome.extraction_method,
             text=outcome.text,
             pages=[page.text for page in outcome.pages],
             tables=[table.to_dict() for table in _tables_of(outcome)],
             error_code=outcome.error_code,
         )
+        if _seen is not None:
+            _seen[checksum] = result
+        return result
 
     def _extract(
         self, data: bytes, *, filename: str, mime_type: str | None, document_id: int | str
@@ -356,6 +413,7 @@ class TenderDocumentProcessor(DocumentProcessor):
                     pages=pdf_result.pages,
                     ocr_engine=first_ocr.ocr_engine if first_ocr else None,
                     ocr_engine_version=first_ocr.ocr_engine_version if first_ocr else None,
+                    document_metadata=dict(pdf_result.metadata),
                 )
 
             docx_result = extract_docx(data)
@@ -364,6 +422,7 @@ class TenderDocumentProcessor(DocumentProcessor):
                 extraction_method=docx_result.method,
                 text=docx_result.text,
                 sections=docx_result.sections,
+                document_metadata=dict(docx_result.metadata),
             )
         except ProcessingError as exc:
             log.warning(
@@ -408,6 +467,62 @@ def _tables_of(outcome: ExtractionOutcome) -> list[ExtractedTable]:
     return collected
 
 
+def _tag_page_languages(pages: list[ExtractedPage]) -> list[ExtractedPage]:
+    """Return a new list of :class:`ExtractedPage` with per-page language metadata attached.
+
+    Language detection runs on the page's own text (prompt 09 §10).  Pages with insufficient
+    text stay at ``language=None`` rather than inheriting the document language, so the metadata
+    accurately reports where detection was possible.  The frozen dataclass is replaced rather than
+    mutated.
+    """
+    tagged: list[ExtractedPage] = []
+    for page in pages:
+        lang, _conf = detect_language(page.text)
+        if lang == page.language:
+            tagged.append(page)
+        else:
+            tagged.append(
+                ExtractedPage(
+                    number=page.number,
+                    text=page.text,
+                    method=page.method,
+                    tables=page.tables,
+                    native_text_chars=page.native_text_chars,
+                    ocr_engine=page.ocr_engine,
+                    ocr_engine_version=page.ocr_engine_version,
+                    language=lang,
+                )
+            )
+    return tagged
+
+
+def _tag_section_languages(sections: list[ExtractedSection]) -> list[ExtractedSection]:
+    """Return a new list of :class:`ExtractedSection` with per-section language metadata attached.
+
+    Detection runs on the section text (prompt 09 §10).  Table sections carry the rendered table
+    text, which is short and often purely numeric, so many will remain ``None``; that is correct
+    and expected.
+    """
+    tagged: list[ExtractedSection] = []
+    for section in sections:
+        lang, _conf = detect_language(section.text)
+        if lang == section.language:
+            tagged.append(section)
+        else:
+            tagged.append(
+                ExtractedSection(
+                    index=section.index,
+                    kind=section.kind,
+                    text=section.text,
+                    tables=section.tables,
+                    style=section.style,
+                    heading_level=section.heading_level,
+                    language=lang,
+                )
+            )
+    return tagged
+
+
 def _checksum_hint(key: str) -> str:
     """Best-effort checksum from a storage key laid out as ``.../attachments/{checksum}/{name}``."""
     parts = key.split("/")
@@ -429,11 +544,13 @@ class DocumentProcessingService:
         ocr: OcrEngine | None = None,
         config: DocumentProcessingConfig | None = None,
         store: ExtractionStore | None = None,
+        translation: TranslationBoundary | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._storage = storage
         self._ocr = ocr
         self._config = config or DocumentProcessingConfig()
+        self._translation = translation
         self._store = store or ExtractionStore(
             storage, config_version=self._config.config_version
         )
@@ -459,14 +576,72 @@ class DocumentProcessingService:
         correlation = correlation_id or get_correlation_id() or new_correlation_id()
         with correlation_context(correlation):
             snapshots = self._load_documents(tender_id)
-            documents = [self._process_snapshot(snapshot, correlation) for snapshot in snapshots]
+            # Deduplication across the snapshot list: when two Document rows share a checksum
+            # (the typical result of a ZIP member that appears at more than one path after
+            # acquisition expansion), the second is replaced with the first extraction result
+            # rather than repeating the work.  The record for the duplicate still appears in the
+            # bundle — it is never silently discarded — but its content points at the already-
+            # persisted artifact so no redundant extraction artifact is written.
+            _seen_checksums: dict[str, DocumentExtraction] = {}
+            documents: list[DocumentExtraction] = []
+            for snapshot in snapshots:
+                checksum = snapshot.checksum
+                if checksum and checksum in _seen_checksums:
+                    prior = _seen_checksums[checksum]
+                    log.debug(
+                        "skipping duplicate document bytes",
+                        extra={
+                            "stage": "processing",
+                            "document_id": snapshot.document_id,
+                            "tender_id": tender_id,
+                            "duplicate_of": prior.document_id,
+                            "checksum": checksum,
+                        },
+                    )
+                    # Re-use the prior extraction but stamp it with this document's identity so
+                    # every row in the bundle resolves to a known document.
+                    duplicate = DocumentExtraction(
+                        document_id=snapshot.document_id,
+                        tender_id=snapshot.tender_id,
+                        filename=snapshot.filename,
+                        source_url=snapshot.source_url,
+                        extraction_status=prior.extraction_status,
+                        extraction_method=prior.extraction_method,
+                        text=prior.text,
+                        mime_type=snapshot.mime_type,
+                        checksum=snapshot.checksum,
+                        storage_path=snapshot.storage_path,
+                        language=prior.language,
+                        language_confidence=prior.language_confidence,
+                        language_source=prior.language_source,
+                        error_code=prior.error_code,
+                        pages=prior.pages,
+                        sections=prior.sections,
+                        archive_parent_url=snapshot.archive_parent_url,
+                        document_metadata=dict(prior.document_metadata),
+                        metadata=prior.metadata,
+                    )
+                    key = self._store.write_extraction(duplicate)
+                    self._persist_row(snapshot, duplicate, ref_key=key)
+                    documents.append(duplicate)
+                    continue
+
+                result = self._process_snapshot(snapshot, correlation)
+                documents.append(result)
+                if checksum and result.is_extracted:
+                    _seen_checksums[checksum] = result
+            languages = bundle_languages([document.language for document in documents])
 
             bundle = TenderDocumentBundle(
                 tender_id=tender_id,
                 documents=documents,
                 incomplete_inputs=_incomplete(documents),
-                languages=bundle_languages([document.language for document in documents]),
+                languages=languages,
                 metadata=self._bundle_metadata(correlation),
+                # Recorded on every bundle, never inferred by the consumer: with no provider
+                # configured the bundle states the limitation instead of leaving the AI stage to
+                # assume the documents are English (prompt 12 §6).
+                translation=build_translation_record(languages, self._translation),
                 created_at=_utcnow_iso(),
             )
             self._store.write_bundle(bundle)
@@ -578,6 +753,17 @@ class DocumentProcessingService:
                 confidence = detected_confidence
                 source = "detected"
 
+        # Per-segment language tagging: annotate each page / section with its own detected
+        # language so downstream consumers can handle mixed-language documents without having to
+        # re-run detection (prompt 09 §10).  This runs only when there is content to tag.
+        pages = outcome.pages
+        sections = outcome.sections
+        if outcome.status == _STATUS_EXTRACTED:
+            if pages:
+                pages = _tag_page_languages(pages)
+            if sections:
+                sections = _tag_section_languages(sections)
+
         extraction = DocumentExtraction(
             document_id=snapshot.document_id,
             tender_id=snapshot.tender_id,
@@ -593,9 +779,10 @@ class DocumentProcessingService:
             language_confidence=confidence,
             language_source=source,
             error_code=outcome.error_code,
-            pages=outcome.pages,
-            sections=outcome.sections,
+            pages=pages,
+            sections=sections,
             archive_parent_url=snapshot.archive_parent_url,
+            document_metadata=dict(outcome.document_metadata),
             metadata=ProcessingMetadata(
                 processor=PROCESSOR_NAME,
                 processor_version=PROCESSOR_VERSION,

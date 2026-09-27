@@ -234,19 +234,84 @@ def test_cyclic_next_link_does_not_loop() -> None:
     assert candidates[0].external_id == "159"
 
 
+def _synthetic_page(ids: list[str], next_href: str | None = None) -> str:
+    """Minimal listing markup for a synthetic site, matching the default selectors."""
+    rows = "".join(
+        '<div class="col-md-6"><div class="card"><div class="card-header"><h5>'
+        f'<a href="/tenders/tenders/{tender_id}/list">Synthetic tender {tender_id}</a>'
+        "</h5></div></div></div>"
+        for tender_id in ids
+    )
+    nxt = f'<a rel="next" href="{next_href}">next</a>' if next_href else ""
+    return f"<html><body><div>{rows}</div>{nxt}</body></html>"
+
+
 def test_max_pages_limit_enforced() -> None:
-    """Pagination halts once the configured maximum page count is reached."""
+    """Pagination halts once the configured maximum page count is reached.
+
+    Each served page carries distinct rows, so the cap — not the duplicate guard — is what
+    ends the crawl.
+    """
+    pages = {
+        LISTING_URL: _synthetic_page(["1"], next_href=LISTING_URL + "?page=2"),
+        LISTING_URL + "?page=2": _synthetic_page(["2"], next_href=LISTING_URL + "?page=3"),
+        LISTING_URL + "?page=3": _synthetic_page(["3"], next_href=LISTING_URL + "?page=4"),
+    }
+    adapter = WahoPaginatedAdapter(
+        listing_url=LISTING_URL,
+        fetcher=lambda url: HttpResponse(200, {}, pages[url], url),
+        parser_config={"max_pages": 2},
+        policy=CrawlPolicy(request_interval_seconds=0.0),
+    )
+    assert [c.external_id for c in adapter.list_new_tenders()] == ["1", "2"]
+
+
+def test_pagination_stops_when_a_page_repeats_earlier_rows() -> None:
+    """A site that serves page 1 again on page 2 ends the crawl instead of looping."""
+    adapter = WahoPaginatedAdapter(
+        listing_url=LISTING_URL,
+        fetcher=lambda url: HttpResponse(
+            200, {}, _synthetic_page(["1"], next_href=LISTING_URL + "?page=2"), url
+        ),
+        policy=CrawlPolicy(request_interval_seconds=0.0),
+    )
+    assert [c.external_id for c in adapter.list_new_tenders()] == ["1"]
+
+
+def test_pagination_stop_on_no_new_items_can_be_disabled() -> None:
+    """``stop_when_no_new_items=False`` keeps paginating past a page that adds nothing.
+
+    Deduplication is unconditional — a tender is returned once per crawl — so what this flag
+    controls is only whether a fruitless page ends the crawl or the next one is still tried.
+    """
+    requested: list[str] = []
 
     def fetch(url: str) -> HttpResponse:
-        return HttpResponse(200, {}, _fixture("listing_page_1.html"), url)
+        requested.append(url)
+        if "page=3" in url:
+            return HttpResponse(200, {}, _synthetic_page(["3"]), url)
+        ids = ["1", "2"] if "page=2" not in url else ["2", "3"]
+        next_href = LISTING_URL + f"?page={len(requested) + 1}"
+        return HttpResponse(200, {}, _synthetic_page(ids, next_href=next_href), url)
 
     adapter = WahoPaginatedAdapter(
         listing_url=LISTING_URL,
         fetcher=fetch,
-        parser_config={"max_pages": 2},
+        parser_config={"stop_when_no_new_items": False, "max_pages": 3},
         policy=CrawlPolicy(request_interval_seconds=0.0),
     )
-    assert len(adapter.list_new_tenders()) == 4  # 2 per page, but capped at 2 pages
+    # Page 3 repeats nothing, so without the stop rule the cap is what ends the crawl.
+    assert [c.external_id for c in adapter.list_new_tenders()] == ["1", "2", "3"]
+    assert len(requested) == 3
+
+
+def test_listings_carry_strategy_provenance() -> None:
+    """Every discovered listing records the response kind and page it came from."""
+    adapter = _adapter({LISTING_URL: "listing_page_1.html", PAGE2_URL: "listing_empty_page.html"})
+    listing = adapter.list_new_tenders()[0]
+    assert listing.raw_metadata["source_strategy"] == "html_listing"
+    assert listing.raw_metadata["discovery_url"] == LISTING_URL
+    assert listing.raw_metadata["identity_source"] == "detail_href_pattern"
 
 
 def test_missing_deadline_returns_listing() -> None:

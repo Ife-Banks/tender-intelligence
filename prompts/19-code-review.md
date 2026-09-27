@@ -20,7 +20,7 @@ Review systematically:
 3. **Data model (`docs/03`):** entities/fields/constraints/indexes match; enums correct; migrations non-destructive; `approved_for_company_docs` default false; Test Mode default ON.
 4. **Adapters & processing (`docs/05`–`docs/07`):** WAHO isolation; document resilience; triage/verdict separation; evidence rules ("no evidence on file", citations); JSON validation + single retry + `verdict_failed`; KB version/provider/model recording; data-policy gate incl. fallback.
 5. **Notifications (`docs/08`):** provider chain, planner, Test Mode routing, snapshots, secure links, attached-vs-linked logging, update/alert templates.
-6. **Admin (`docs/09`, `prompts/15`, `prompts/16`):** ten screens; API write/read split; secret write-only; viewer restrictions.
+6. **Admin (`docs/09`, `prompts/15`, `prompts/16`):** ten screens; internal no-login scope per O11; secret write-only; Test Mode, validation, and audit safeguards.
 7. **Security (`docs/10`):** every §10.3 invariant; secrets-in-logs grep clean; audit log values safe; signed links.
 8. **Tests (`docs/11`):** coverage of failure scenarios F1–F20; no test was deleted/weakened; QA trace from `prompts/18` is consistent.
 9. **Deployment / release gate (`docs/12`):** phase order respected; **go-live blockers correctly surfaced — this is where deployment concerns are reviewed** (the standalone deployment prompt was removed; go-live requirements live in `docs/12` and are verified here). Nothing is released without decisions on the open items.

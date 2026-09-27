@@ -154,5 +154,5 @@ These feed the Stage-A triage rules (§5.6) and resolve O5/O6/O7.
 
 ## Status discipline
 
-- Items used for go-live (O1, O3, O4, O9, O11, O12, O16, O20 + triage profile) must be `DONE` before Test Mode is switched off (docs/13 blockers table).
+- Items used for go-live (O1, O3, O4, O9, O12, O16, O20 + triage profile) must be `DONE` before Test Mode is switched off (docs/13 blockers table). O11 application login is deferred and is not a Test Mode/go-live configuration prerequisite for this version.
 - Unanswered items must never be silently invented in code (PROJECT_RULES #4, #5).

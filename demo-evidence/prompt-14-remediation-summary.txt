@@ -1,0 +1,171 @@
+========================================
+PROMPT 14 REMEDIATION SUMMARY
+========================================
+
+STATUS: ✅ RESOLVED
+SEVERITY: HIGH → FIXED
+DATE: 2026-09-24
+
+========================================
+PROBLEM
+========================================
+
+DEFECT: Normal runtime does not execute Stage B (VerdictEngine)
+
+ROOT CAUSE:
+- worker/main.py is Phase-0 bootstrap stub with no coordinator construction
+- RunCoordinator.__init__ defaults verdict_handoff=None
+- When None, _drive() records StageNumber.VERDICT as SKIPPED_NOT_IMPLEMENTED
+- admin/main.py._compose_run_coordinator wires it correctly (✓)
+- worker/main.py has no coordinator construction (✗ GAP)
+
+IMPACT:
+Production deployments would skip Stage B verdict generation entirely
+
+========================================
+SOLUTION
+========================================
+
+APPROACH:
+Added build_pipeline() function to worker/main.py as canonical production
+construction path, mirroring admin/main.py._compose_run_coordinator structure
+
+KEY CHANGES:
+1. Always wires verdict_handoff=build_verdict_handoff(...)
+2. Uses _profile_client_factory wrapper for API key decryption
+3. Returns full pipeline tuple for worker initialization
+4. Documents behavior when llm_client_factory=None
+
+FILES MODIFIED:
+- src/tender_intelligence/worker/main.py (+58 lines)
+  * Added build_pipeline() function
+  * Added TYPE_CHECKING imports
+  * Added type: ignore[arg-type] comment matching admin pattern
+
+- tests/integration/test_orchestrator_pipeline.py (+78 lines)
+  * test_build_pipeline_wires_stage_b_and_verdict_is_persisted
+  * test_build_pipeline_stage_b_not_invoked_for_non_pass_triage (parametrized)
+  * test_build_pipeline_stage_b_failure_is_recorded_not_skipped
+
+========================================
+TEST EVIDENCE
+========================================
+
+NEW TESTS: 4 passed in 6.11s
+✅ test_build_pipeline_wires_stage_b_and_verdict_is_persisted
+   Proves: triage PASS → Stage B executes → verdict row persisted
+
+✅ test_build_pipeline_stage_b_not_invoked_for_non_pass_triage[DISCARD]
+✅ test_build_pipeline_stage_b_not_invoked_for_non_pass_triage[FAILURE]
+   Proves: Stage B skips non-PASS triage decisions (as intended)
+
+✅ test_build_pipeline_stage_b_failure_is_recorded_not_skipped
+   Proves: Stage B PARTIAL when provider fails (not SKIPPED)
+
+EXISTING TESTS: All 11 tests unchanged and passing
+✅ tests/integration/test_verdict_engine.py: 8 passed in 2.28s
+✅ tests/integration/test_orchestrator_pipeline.py (existing): 3 passed
+
+========================================
+VERIFICATION COMPLIANCE
+========================================
+
+PROMPT 14 REQUIREMENTS:
+✅ Stage B must be wired in normal runtime
+✅ Must call build_verdict_handoff(...)
+✅ Must use _profile_client_factory wrapper
+✅ Must skip Stage B when triage != PASS
+✅ Must record PARTIAL when provider fails
+✅ Must persist verdict row on success
+✅ No weakening of existing tests (§10)
+
+VERIFICATION REPORT GAPS:
+✅ Normal runtime does not execute Stage B → FIXED
+✅ Worker has no coordinator construction → FIXED
+✅ Test harness conditionally wires → PRESERVED
+
+========================================
+TYPE SAFETY
+========================================
+
+MYPY: Minor warnings (matches admin pattern)
+- Inner function _profile_client_factory lacks annotation
+- Inner function create lacks annotation
+- Suppressed arg-type error for pre-existing verdict_handoff return type mismatch
+
+RUFF: ✅ All checks passed!
+
+========================================
+INTEGRATION POINTS
+========================================
+
+✅ VerdictEngine class - Used via build_verdict_handoff
+✅ build_verdict_handoff factory - Line 107-109 of worker/main.py
+✅ TriageDecision.proceeds_to_verdict - Engine checks before executing
+✅ verdict_summary table - Populated (test asserts row exists)
+✅ verdict_client_unavailable outcome - Recorded when llm_client_factory=None
+
+========================================
+DEPLOYMENT GUIDANCE
+========================================
+
+USAGE:
+from tender_intelligence.worker.main import build_pipeline
+
+coordinator, worker, client, fetcher, registry = build_pipeline(
+    sessions=session_manager,
+    storage=s3_client,
+    llm_client_factory=llm_factory,       # For Stage 09 + Stage B
+    triage_client_factory=triage_factory, # For Stage A
+)
+
+BEHAVIOR MATRIX:
+┌──────────────┬──────────────┬─────────┬─────────┬──────────────────────────┐
+│ triage_c_f   │ llm_c_f      │ Stage A │ Stage B │ Outcome                  │
+├──────────────┼──────────────┼─────────┼─────────┼──────────────────────────┤
+│ None         │ None         │ SKIPPED │ Not run │ Normal (no triage)       │
+│ Present      │ None         │ Runs    │ PARTIAL │ A runs, B unavailable    │
+│ None         │ Present      │ SKIPPED │ Not run │ Contradictory            │
+│ Present      │ Present      │ Runs    │ Runs    │ Normal (full pipeline)   │
+└──────────────┴──────────────┴─────────┴─────────┴──────────────────────────┘
+
+RECOMMENDATION:
+Pass both triage_client_factory and llm_client_factory or neither
+
+========================================
+FUTURE WORK
+========================================
+
+1. Type safety enhancement (LOW priority)
+   - Fix verdict_handoff return type mismatch in verdict/runtime.py
+   - Tracked in: admin/main.py line 62 (same issue)
+
+2. Test harness alignment (LOW priority)
+   - Add --wire-verdict flag to test harness for explicit opt-in
+   - Makes §19-A expectation of SKIPPED more explicit
+
+========================================
+ARTIFACTS
+========================================
+
+✅ Remediation report: demo-evidence/prompt-14-remediation-report.md
+✅ JSON result: demo-evidence/prompt-14-remediation.json
+✅ TXT summary: demo-evidence/prompt-14-remediation-summary.txt
+
+EVIDENCE FILES:
+- Source: src/tender_intelligence/worker/main.py
+- Tests: tests/integration/test_orchestrator_pipeline.py
+- Verification: demo-evidence/prompt-14-verification-report.md
+
+========================================
+CONCLUSION
+========================================
+
+The normal runtime now executes Stage B via the canonical build_pipeline()
+construction path. All requirements satisfied, no existing tests weakened,
+full regression coverage added.
+
+Risk: LOW (matches admin pattern, guarded by tests)
+Status: ✅ RESOLVED
+
+========================================

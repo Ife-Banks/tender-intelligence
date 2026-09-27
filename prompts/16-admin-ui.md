@@ -1,5 +1,10 @@
 # Prompt 16 — Admin UI
 
+> **Current scope amendment (Prompt 16C):** This amendment supersedes every conflicting
+> authentication or Admin/Viewer requirement below. Do not implement application login or an Admin/Viewer
+> identity simulation. The internal Admin UI opens directly; keep all existing operational
+> safeguards. See `docs/13-open-decisions.md` O11.
+
 > Paste `prompts/00-master-context.md` first.
 
 ## Read
@@ -28,20 +33,20 @@ Build each confirmed screen (`docs/09` §9.2):
 
 **UI rules:**
 - Secrets shown only as "set" + optional last-4; never rendered in full; never sent back to API as value.
-- Viewer role: KB and secrets screens hidden entirely (server also enforces).
+- Current internal UI has no Viewer identity role; preserve credential write-only behavior instead.
 - Dry-runs/test calls surfaced as results, not as side-effecting actions.
 - Accessible, responsive, and consistent with the API's read/write split (`docs/09` §9.10).
 
 ## Out of scope
 
 - Backend logic (API prompt owns it).
-- Deciding login method/identity (O11) — consume whatever the API provides.
+- Implementing application login/identity (O11 is deferred); current UI opens directly.
 - Any pipeline/worker functionality in the UI.
 
 ## Tests
 
 - Component tests: each screen renders from fixture API payloads; dry-run result display; secret fields masked; last-dev-recipient guard surfaced.
-- Viewer-role test: KB + secrets routes not rendered.
+- No-login test: all ten screens render without a simulated identity; credentials remain write-only.
 - Test-Mode toggle flow requires confirmation and reflects default ON.
 - No UI test may hit a real provider (mock the API client).
 

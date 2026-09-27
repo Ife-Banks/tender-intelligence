@@ -11,13 +11,13 @@ const NAV = [
   ["health", "Health dashboard", "activity"],
   ["sources", "Sources", "globe"],
   ["tenders", "Tenders", "file"],
-  ["knowledge-base", "Knowledge base", "book", "admin"],
+  ["knowledge-base", "Knowledge base", "book"],
   ["llm", "LLM providers", "spark"],
   ["recipients", "Recipients", "users"],
   ["mail", "Mail providers", "mail"],
   ["triage", "Triage & urgency", "filter"],
   ["settings", "Settings", "settings"],
-  ["audit", "Audit log", "list", "admin"],
+  ["audit", "Audit log", "list"],
 ];
 const ICON_PATHS = {
   activity: [{ d: "M3 12h4l3-8 4 16 3-8h4" }],
@@ -45,7 +45,6 @@ const DESCRIPTIONS = {
   audit: "Review persisted configuration history with secrets omitted.",
 };
 const state = {
-  role: "admin",
   page: routeFromHash(),
   offset: 0,
   pageSize: 20,
@@ -64,7 +63,6 @@ function isLive() { return state.live; }
 function connectionLabel() {
   if (!state.live) return "Offline fixture mode";
   const cs = api.connectionState;
-  if (cs === "auth_required") return "Authentication required";
   if (cs === "forbidden") return "Access denied";
   return "Connected · live data";
 }
@@ -108,6 +106,7 @@ function errorMessage(error) {
     const extras = [];
     if (error.fields.length) extras.push(error.fields.map((field) => `${field.field || "Field"}: ${field.message}`).join("; "));
     if (error.requestId) extras.push(`Request ID: ${error.requestId}`);
+    if (error.category) extras.push(`Provider category: ${error.category}`);
     extras.push(`Error code: ${error.code}`);
     return [error.message, ...extras].join(" ");
   }
@@ -125,12 +124,6 @@ function errorPanel(error, retry) {
   return box;
 }
 
-function authRequiredPanel() {
-  return node("section", { class: "card card-pad error-state", role: "alert" }, [
-    node("h2", { text: "Authentication required" }),
-    node("p", { class: "muted", text: "Your session is missing or has expired. The Admin API rejected this request. Sign in through the configured identity provider, then refresh this page." }),
-  ]);
-}
 
 function accessDeniedPanel() {
   return node("section", { class: "card card-pad error-state", role: "alert" }, [
@@ -351,24 +344,11 @@ confirmDialog.addEventListener("cancel", (event) => {
   confirmResolver = null;
 });
 
-function setDemoRole(role) {
-  state.role = role;
-  if (api instanceof FixtureAdminApi) api.setRole(role);
-  $("#actor-role").textContent = `Preview role · ${role}`;
-  setText("#connection-label", connectionLabel());
-  renderNavigation();
-  if ((state.page === "knowledge-base" || state.page === "audit") && role !== "admin") {
-    state.page = "health";
-    location.hash = "#/health";
-  }
-  renderCurrentPage();
-}
 
 function renderNavigation() {
   navElement.replaceChildren();
   const list = node("div", { class: "nav-list" });
-  for (const [key, title, iconName, role] of NAV) {
-    if (role === "admin" && state.role !== "admin") continue;
+  for (const [key, title, iconName] of NAV) {
     const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     icon.setAttribute("viewBox", "0 0 24 24");
     icon.setAttribute("aria-hidden", "true");
@@ -424,7 +404,6 @@ $("#refresh-button").addEventListener("click", async () => {
   state.dirty = false;
   await renderCurrentPage();
 });
-$("#demo-role").addEventListener("change", (event) => setDemoRole(event.target.value));
 const scenarioSelect = $("#demo-scenario");
 for (const [value, label] of DEMO_SCENARIOS) scenarioSelect.append(node("option", { value }, label));
 scenarioSelect.addEventListener("change", async () => {
@@ -443,23 +422,8 @@ async function renderCurrentPage() {
   setText("#page-title", TITLES[state.page] || "Health dashboard");
   setText("#page-description", DESCRIPTIONS[state.page] || "");
   syncTestModeIndicator();
-  if (api instanceof LiveAdminApi && api.connectionState === "auth_required") {
-    content.replaceChildren(authRequiredPanel());
-    return;
-  }
   if (api instanceof LiveAdminApi && api.connectionState === "forbidden") {
     content.replaceChildren(accessDeniedPanel());
-    return;
-  }
-  if ((state.page === "knowledge-base" || state.page === "audit") && state.role !== "admin") {
-    content.replaceChildren(node("section", { class: "card card-pad", role: "alert" }, [
-      node("h2", { text: "Forbidden" }),
-      node("p", { class: "muted", text: "Knowledge Base and audit data are restricted to Admin users." }),
-    ]));
-    return;
-  }
-  if (!NAV.some(([key, , , role]) => key === state.page && (role !== "admin" || state.role === "admin"))) {
-    content.replaceChildren(node("section", { class: "card card-pad", role: "alert" }, "This screen is not available for your role."));
     return;
   }
   content.setAttribute("aria-busy", "true");
@@ -479,13 +443,7 @@ async function renderCurrentPage() {
     };
     await renderers[state.page]();
   } catch (error) {
-    if (api instanceof LiveAdminApi && api.connectionState === "auth_required") {
-      state.role = "viewer";
-      setText("#connection-label", connectionLabel());
-      setText("#actor-role", "Role · signed out");
-      renderNavigation();
-      content.replaceChildren(authRequiredPanel());
-    } else content.replaceChildren(errorPanel(error, () => renderCurrentPage()));
+    content.replaceChildren(errorPanel(error, () => renderCurrentPage()));
   } finally {
     content.setAttribute("aria-busy", "false");
   }
@@ -628,7 +586,7 @@ function sourceFields(sourceTypes) {
     { name: "base_url", label: "Base URL", required: true, help: "Must match the selected adapter's supported source configuration." },
     { name: "listing_url", label: "Listing URL" },
     { name: "crawl_frequency_minutes", label: "Crawl frequency (minutes)", type: "number", min: 1, step: 1 },
-    { name: "expected_languages", label: "Expected languages (JSON array)", type: "json", help: "Example: [\"en\", \"fr\"]", wide: true },
+    { name: "expected_languages", label: "Expected languages (JSON array)", type: "json", help: "Initial acceptance set: [\"en\", \"fr\", \"pt\"]. Additional codes can be added without code changes.", wide: true },
     { name: "recipient_scope", label: "Recipient scope (JSON array of IDs)", type: "json", wide: true },
     { name: "parser_config", label: "Adapter parser configuration (JSON)", type: "json", wide: true, help: "The adapter owns this schema. Unsupported settings are not interpreted by the UI." },
     { name: "auth", label: "Source auth configuration (JSON)", type: "json", wide: true, help: "Write-only. Leave empty when not changing credentials." },
@@ -639,24 +597,24 @@ function sourceFields(sourceTypes) {
 async function renderSources() {
   const [data, typesData] = await Promise.all([api.get(`/sources?offset=${state.offset}&limit=${state.pageSize}`), api.get("/sources/supported-types")]);
   const top = node("div", { class: "toolbar" });
-  if (state.role === "admin") top.append(button("＋ Add source", () => openSourceEditor(typesData.items || []), "button button-primary"));
-  top.append(node("span", { class: "small-muted", text: `${data.pagination?.total ?? 0} configured source(s)` }));
+  top.append(button("＋ Add source", () => openSourceEditor(typesData.items || []), "button button-primary"));
+  top.append(node("span", { class: "small-muted", text: `${data.pagination?.total ?? 0} configured source(s) · scheduler checks due sources on its polling cycle; Run Now crawls immediately and normal deduplication still applies` }));
   const rows = (data.items || []).map((source) => [
     node("div", {}, [node("strong", { text: source.name }), node("div", { class: "small-muted", text: `${source.source_type} · ${source.base_url}` })]),
     pill(source.active ? "Enabled" : "Disabled", source.active ? "success" : "warning"),
     source.crawl_frequency_minutes ? `${source.crawl_frequency_minutes} min` : "Not configured",
-    formatDate(source.last_run_at),
-    source.last_error ? "Failure recorded" : "None recorded",
+    node("div", {}, [node("div", { text: formatDate(source.last_run_at) }), node("div", { class: "small-muted", text: `Next: ${formatDate(source.next_run_at)}` })]),
+    node("div", {}, [node("div", { text: source.last_failed_run ? formatDate(source.last_failed_run) : "None recorded" }), node("div", { class: "small-muted", text: source.last_successful_run ? `Last success: ${formatDate(source.last_successful_run)}` : "No successful run recorded" })]),
     source.auth_configured ? "Configured · value hidden" : "Not configured",
     node("div", { class: "table-actions" }, [
-      button("Edit", () => openSourceEditor(typesData.items || [], source), "button button-quiet button-small", { disabled: state.role !== "admin" }),
-      state.role === "admin" && button(source.active ? "Disable" : "Enable", () => toggleSource(source), "button button-quiet button-small"),
-      state.role === "admin" && button("Test dry run", () => testSource(source), "button button-primary button-small"),
+      button("Edit", () => openSourceEditor(typesData.items || [], source), "button button-quiet button-small", { disabled: false }),
+      true && button(source.active ? "Disable" : "Enable", () => toggleSource(source), "button button-quiet button-small"),
+      true && button("Test dry run", () => testSource(source), "button button-primary button-small"),
+      button("Run Now", () => runAdminOperation({ kind: "source", id: source.id, label: source.name }), "button button-primary button-small", { disabled: !source.active }),
     ]),
   ]);
-  content.replaceChildren(top, makeTable(["Source", "State", "Schedule", "Last run", "Last failure", "Credentials", "Actions"], rows));
+  content.replaceChildren(top, makeTable(["Source", "State", "Schedule", "Last run / next run", "Run health", "Credentials", "Actions"], rows));
   content.append(pagination(data, (offset) => { state.offset = offset; renderCurrentPage(); }));
-  if (state.role === "viewer") content.append(node("p", { class: "small-muted", text: "Source tests and configuration changes are available to Admin users only." }));
 }
 
 function openSourceEditor(types, source = null) {
@@ -717,6 +675,62 @@ async function testSource(source) {
   }
 }
 
+async function runAdminOperation({ kind, id, label }) {
+  try {
+    const settings = await api.get("/settings");
+    if (isLive() && settings.test_mode !== true) {
+      showMessage("error", "Turn Test Mode on in Settings before using Run Now or Process Now.");
+      return;
+    }
+    const isTender = kind === "tender";
+    const title = isTender ? "Process this persisted tender?" : "Run this source now?";
+    const explanation = isTender
+      ? `This re-runs downstream evaluation for “${label}” using the stored tender. Discovery and normal source deduplication are skipped. Test Mode must be on; any eligible notification follows the configured test recipient rules.`
+      : `This performs a normal crawl for “${label}” now. Normal deduplication applies. Test Mode must be on; no production recipient delivery is permitted.`;
+    if (!await askConfirm(title, explanation, isTender ? "Process tender" : "Run source", false)) return;
+    const result = await api.post(isTender ? `/tenders/${id}/process` : `/sources/${id}/run`, {});
+    const correlationId = result.correlation_id;
+    const progress = node("section", { class: "card card-pad stack", role: "status", "aria-live": "polite" }, [
+      node("span", { class: "pill info", text: "TEST MODE · operation in progress" }),
+      node("h2", { text: `${isTender ? "Processing" : "Running"}: ${label}` }),
+      node("p", { class: "small-muted", text: `Correlation ID: ${correlationId}` }),
+      loadingPanel("Waiting for pipeline stages…"),
+    ]);
+    content.replaceChildren(progress);
+    let operation = result;
+    const deadline = Date.now() + 180_000;
+    while (["QUEUED", "RUNNING"].includes(operation.status) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      operation = await api.get(`/operations/${encodeURIComponent(correlationId)}`);
+      const stageRows = Object.entries(operation.stages || {}).map(([stage, outcome]) =>
+        `${stage}: ${typeof outcome === "object" ? outcome.status : outcome}${typeof outcome === "object" && outcome.error_code ? ` (${outcome.error_code})` : ""}`);
+      progress.replaceChildren(
+        node("span", { class: `pill ${operation.status === "FAILED" ? "danger" : operation.status === "COMPLETED" ? "success" : "info"}`, text: `TEST MODE · ${operation.status}` }),
+        node("h2", { text: `${isTender ? "Processing" : "Running"}: ${label}` }),
+        node("p", { class: "small-muted", text: `Correlation ID: ${correlationId} · Run ${operation.run_history_id ?? "pending"}` }),
+        stageRows.length ? node("pre", { class: "code-block" }, stageRows.join("\n")) : loadingPanel("Waiting for pipeline stages…"),
+      );
+    }
+    if (["QUEUED", "RUNNING"].includes(operation.status)) {
+      progress.append(node("p", { class: "muted", text: "Still running. Keep this correlation ID to check the operation status." }));
+      progress.append(button("Check status", () => runAdminOperationStatus(correlationId), "button button-quiet"));
+    } else {
+      progress.append(node("p", { class: "muted", text: operation.error_code ? `Operation ended with ${operation.error_code}.` : "Operation finished. Review the stage results and tender timeline." }));
+      if (isTender) progress.append(button("Open tender timeline", () => openTender(id), "button button-quiet"));
+      progress.append(button("Back", () => navigate(isTender ? "tenders" : "sources"), "button button-quiet"));
+    }
+  } catch (error) {
+    showMessage("error", errorMessage(error));
+  }
+}
+
+async function runAdminOperationStatus(correlationId) {
+  try {
+    const operation = await api.get(`/operations/${encodeURIComponent(correlationId)}`);
+    showMessage(operation.status === "FAILED" ? "error" : "info", `Operation ${operation.status}. Correlation ID: ${correlationId}.`);
+  } catch (error) { showMessage("error", errorMessage(error)); }
+}
+
 async function renderTenders() {
   const params = new URLSearchParams({ offset: String(state.offset), limit: String(state.pageSize) });
   for (const key of ["source_id", "status", "recommendation"]) if (state.filters[key]) params.set(key, state.filters[key]);
@@ -741,14 +755,15 @@ async function renderTenders() {
     tender.verdict ? tender.verdict.recommendation : "No verdict returned",
     tender.incomplete_inputs === undefined ? "Not provided" : tender.incomplete_inputs ? pill("Incomplete inputs", "warning") : pill("Complete inputs", "success"),
     tender.correlation_id || "Unavailable",
+    button("Process Now", () => runAdminOperation({ kind: "tender", id: tender.id, label: tender.title }), "button button-primary button-small"),
   ]);
-  content.replaceChildren(filters, makeTable(["Tender", "Status", "Deadline", "Urgency", "Verdict", "Input completeness", "Correlation ID"], rows));
+  content.replaceChildren(filters, makeTable(["Tender", "Status", "Deadline", "Urgency", "Verdict", "Input completeness", "Correlation ID", "Action"], rows));
   content.append(pagination(data, (offset) => { state.offset = offset; renderCurrentPage(); }));
 }
 
 async function openTender(tenderId) {
   state.activeTenderId = tenderId;
-  content.replaceChildren(loadingPanel("Loading synthetic tender and timeline…"));
+  content.replaceChildren(loadingPanel("Loading persisted tender and timeline…"));
   try {
     const [tender, timeline] = await Promise.all([api.get(`/tenders/${tenderId}`), api.get(`/tenders/${tenderId}/timeline`)]);
     if (state.activeTenderId !== tenderId) return;
@@ -776,9 +791,10 @@ async function openTender(tenderId) {
       ]));
     }
     const back = button("← Back to tenders", () => navigate("tenders"), "button button-quiet");
-    const detail = node("section", { class: "stack" }, [back, card(tender.title, [details, tender.url ? linkButton("Open source notice", tender.url) : null], `Tender ${tender.id} · ${tender.source_name || "Unknown source"}`), card("Pipeline timeline", [events.childNodes.length ? events : emptyPanel("No timeline events were returned.")], `Correlation ${timeline.correlation_id || "unavailable"} · ${timeline.run_ids?.length || 0} run(s)`)]);
-    if (state.role === "admin") {
-      const verdictBox = card("Verdict history", [loadingPanel("Loading Admin-only verdict details…")]);
+    const processButton = button("Process Now", () => runAdminOperation({ kind: "tender", id: tender.id, label: tender.title }), "button button-primary");
+    const detail = node("section", { class: "stack" }, [back, card(tender.title, [details, tender.url ? linkButton("Open source notice", tender.url) : null, processButton], `Tender ${tender.id} · ${tender.source_name || "Unknown source"}`), card("Pipeline timeline", [events.childNodes.length ? events : emptyPanel("No timeline events were returned.")], `Correlation ${timeline.correlation_id || "unavailable"} · ${timeline.run_ids?.length || 0} run(s)`)]);
+    {
+      const verdictBox = card("Verdict history", [loadingPanel("Loading verdict details…")]);
       detail.append(verdictBox);
       api.get(`/tenders/${tenderId}/verdicts`).then((data) => {
         if (state.activeTenderId !== tenderId) return;
@@ -800,7 +816,7 @@ async function renderKnowledgeBase() {
   top.append(metric("Tokens reported", data.token_budget?.latest_token_count ?? "Unavailable", "Reported by the Admin API."));
   top.append(metric("Warning threshold", data.token_budget?.warning_share == null ? "Unset" : `${Math.round(data.token_budget.warning_share * 100)}%`, "Configured in shared settings."));
   const upload = card("Upload a new version", [
-    node("p", { class: "muted", text: "Versions are immutable. The selected file is sent to the authenticated Admin API for validation and extraction." }),
+    node("p", { class: "muted", text: "Versions are immutable. The selected file is sent to the Admin API for validation and extraction." }),
     field("Knowledge Base file", "file", "", { name: "file", accept: ".docx,.pdf,.md,.txt", help: "Supported formats: DOCX, PDF, Markdown, and text." }),
     field("Version note", "textarea", "", { name: "note", wide: true, rows: 2 }),
     node("div", { class: "form-actions" }, button("Upload version", null, "button button-primary")),
@@ -863,9 +879,7 @@ async function viewKbVersion(versionId) {
 
 async function renderLlm() {
   const [profiles, roles, usage] = await Promise.all([api.get("/llm/profiles?offset=0&limit=100"), api.get("/llm/roles"), api.get("/llm/usage")]);
-  const admin = state.role === "admin";
-  const actions = node("div", { class: "toolbar" });
-  if (admin) actions.append(button("＋ Add profile", () => editLlmProfile(), "button button-primary"));
+  const actions = node("div", { class: "toolbar" }, button("＋ Add profile", () => editLlmProfile(), "button button-primary"));
   const usageCard = node("div", { class: "grid grid-4" }, [metric("Calls this month", usage.calls ?? "Unavailable"), metric("Known cost", usage.known_cost == null ? "Unavailable" : usage.known_cost, `${usage.cost_unknown_calls ?? 0} call(s) with unknown cost`), metric("Monthly budget", usage.monthly_budget ?? "Unset", usage.budget_open ? "No budget configured" : "Configured in shared settings"), metric("Budget state", usage.budget_open ? "Open" : "Configured", "From persisted usage and settings")]);
   const profileFields = ["name", "model", "context_window_tokens", "active", "approved_for_company_docs"];
   const rows = (profiles.items || []).map((profile) => [
@@ -874,45 +888,55 @@ async function renderLlm() {
     pill(profile.active ? "Active" : "Inactive", profile.active ? "success" : "warning"),
     profile.approved_for_company_docs === undefined ? "Restricted details" : pill(profile.approved_for_company_docs ? "Company docs approved" : "Company docs blocked", profile.approved_for_company_docs ? "warning" : "success"),
     profile.api_key_configured === undefined ? "Hidden" : (profile.api_key_configured ? "Set · write-only" : "Not set"),
-    admin ? node("div", { class: "table-actions" }, [
+    node("div", { class: "table-actions" }, [
       button("Edit", () => editLlmProfile(profile), "button button-quiet button-small"),
-      button("Test connection", () => testLlm(profile), "button button-primary button-small", { disabled: !admin }),
+      button("Test connection", () => testLlm(profile), "button button-primary button-small"),
       button("Delete", () => deleteLlmProfile(profile), "button button-danger button-small"),
-    ]) : "Read only",
+    ]),
   ]);
   const profileSection = section("LLM profiles", "Provider approval is not a business decision the UI can make for you.");
   profileSection.append(actions, makeTable(["Profile", "Endpoint", "State", "Company documents", "API key", "Actions"], rows));
   const roleRows = (roles.items || []).map((item) => {
     const selected = item.profile || item;
-    return [item.role, selected?.name || `Profile ${item.profile_id ?? "unset"}`, item.fallback_profile?.name || (item.fallback_profile_id ? `Profile ${item.fallback_profile_id}` : "No fallback"), admin ? button("Assign", () => editRole(item, profiles.items || []), "button button-quiet button-small") : "Read only"];
+    return [item.role, selected?.name || `Profile ${item.profile_id ?? "unset"}`, item.fallback_profile?.name || (item.fallback_profile_id ? `Profile ${item.fallback_profile_id}` : "No fallback"), button("Assign", () => editRole(item, profiles.items || []), "button button-quiet button-small")];
   });
   const roleSection = section("Role assignments", "Assignments are shared with the pipeline configuration.");
   roleSection.append(makeTable(["Role", "Primary profile", "Fallback profile", "Action"], roleRows));
-  if (admin) roleSection.append(button("＋ Assign role", () => editRole(null, profiles.items || []), "button button-quiet"));
+  roleSection.append(button("＋ Assign role", () => editRole(null, profiles.items || []), "button button-quiet"));
   content.replaceChildren(usageCard, profileSection, roleSection);
 }
 
 function llmProfileFields(source = null) {
   return [
     { name: "name", label: "Profile name", required: true },
+    { name: "provider_name", label: "Provider name (display only)", help: "Optional display name for the provider (e.g., OpenAI, Groq, Anthropic). This is metadata only and does not affect behavior." },
+    { name: "protocol", label: "Protocol / API type", type: "select", choices: [{ value: "openai_compatible", label: "OpenAI Compatible" }, { value: "anthropic", label: "Anthropic" }], required: true, help: "Determines how requests are constructed. Provider name is metadata only." },
     { name: "base_url", label: "Provider base URL", required: true, help: "Use the base URL expected by the configured LLM adapter." },
     { name: "model", label: "Model identifier", required: true },
     { name: "api_key", label: source?.api_key_configured ? "Replace API key" : "API key", type: "password", help: "Write-only. Leave blank to retain the configured key." },
     { name: "context_window_tokens", label: "Context window (tokens)", type: "number", min: 1, step: 1, required: true },
     { name: "max_output_tokens", label: "Maximum output tokens", type: "number", min: 1, step: 1 },
     { name: "temperature", label: "Temperature", type: "number", min: 0, max: 2, step: 0.1 },
+    { name: "top_p", label: "Top P", type: "number", min: 0, max: 1, step: 0.01, help: "Provider sampling setting." },
+    { name: "enable_thinking", label: "Enable model reasoning", type: "checkbox", help: "Reasoning is sent as provider parameters; only final answer content is consumed or persisted." },
+    { name: "reasoning_budget", label: "Reasoning token budget", type: "number", min: 1, step: 1, help: "Optional cap; limited to the effective output-token allowance for each call." },
     { name: "timeout_seconds", label: "Timeout (seconds)", type: "number", min: 1, max: 600, step: 1, required: true },
     { name: "cost_per_1k_input", label: "Input cost per 1k", type: "number", min: 0, step: 0.0001 },
     { name: "cost_per_1k_output", label: "Output cost per 1k", type: "number", min: 0, step: 0.0001 },
     { name: "supports_json", label: "JSON output supported", type: "checkbox" },
     { name: "supports_vision", label: "Vision supported", type: "checkbox" },
+    { name: "supports_response_format", label: "Supports response_format parameter", type: "checkbox", help: "Enable if the provider accepts response_format={\"type\":\"json_object\"}. Disable for providers that reject it." },
+    { name: "supports_include_reasoning", label: "Supports include_reasoning parameter", type: "checkbox", help: "Enable if the provider returns reasoning in a separate field that must be explicitly requested." },
+    { name: "supports_chat_template_kwargs", label: "Uses chat_template_kwargs for thinking control", type: "checkbox", help: "Enable if the provider uses chat_template_kwargs for thinking control and accepts reasoning_budget as a top-level parameter." },
+    { name: "supports_reasoning_effort", label: "Supports reasoning_effort parameter", type: "checkbox", help: "Enable if the provider accepts a reasoning_effort parameter (e.g. low, medium, high) to control reasoning depth." },
+    { name: "reasoning_effort", label: "Reasoning effort", type: "select", choices: [{ value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" }], help: "Only sent when 'Supports reasoning_effort parameter' is enabled." },
     { name: "approved_for_company_docs", label: "Approved for company documents", type: "checkbox", help: "Requires explicit confirmation before changing." },
     { name: "active", label: "Profile active", type: "checkbox" },
   ];
 }
 
 function editLlmProfile(profile = null) {
-  const defaults = { context_window_tokens: 8000, timeout_seconds: 60, supports_json: true, supports_vision: false, approved_for_company_docs: false, active: true };
+  const defaults = { context_window_tokens: 8000, timeout_seconds: 60, protocol: "openai_compatible", supports_json: true, supports_vision: false, supports_response_format: true, supports_include_reasoning: false, supports_chat_template_kwargs: false, approved_for_company_docs: false, active: true, enable_thinking: false };
   const initial = { ...defaults, ...(profile || {}), api_key: "" };
   editorDialog({
     title: profile ? `Edit ${profile.name}` : "Add LLM profile",
@@ -967,20 +991,20 @@ async function testLlm(profile) {
 
 async function renderRecipients() {
   const data = await api.get("/recipients");
-  const actions = state.role === "admin" ? button("＋ Add recipient", () => editRecipient(), "button button-primary") : null;
+  const actions = button("＋ Add recipient", () => editRecipient(), "button button-primary");
   const sections = [];
   for (const [listType, title, note] of [["tender", "Tender recipients", "Recipients configured for tender notices."], ["dev_alert", "Development / alert recipients", "At least one active development/alert recipient is required."]]) {
     const group = (data.items || []).filter((item) => item.list_type === listType);
     const rows = group.map((recipient) => [
-      state.role === "admin" ? node("div", {}, [node("strong", { text: recipient.email }), node("div", { class: "small-muted", text: recipient.name || "No display name" })]) : "Address hidden for Viewer",
+      node("div", {}, [node("strong", { text: recipient.email }), node("div", { class: "small-muted", text: recipient.name || "No display name" })]),
       recipient.delivery || "—",
       pill(recipient.active ? "Active" : "Inactive", recipient.active ? "success" : "warning"),
       recipient.receives_filter || "—",
-      state.role === "admin" ? node("div", { class: "table-actions" }, [
+      node("div", { class: "table-actions" }, [
         button("Edit", () => editRecipient(recipient), "button button-quiet button-small"),
         button(recipient.active ? "Disable" : "Enable", () => saveRecipientActive(recipient), "button button-quiet button-small"),
         button("Delete", () => deleteRecipient(recipient), "button button-danger button-small"),
-      ]) : "Read only",
+      ]),
     ]);
     const part = section(title, note);
     part.append(makeTable(["Recipient", "Delivery", "State", "Filter", "Actions"], rows));
@@ -1006,7 +1030,7 @@ function editRecipient(recipient = null) {
   const initial = recipient || { list_type: "tender", delivery: "to", receives_filter: "all", min_severity: "critical", source_scope: null, alert_types: null, active: true };
   editorDialog({
     title: recipient ? `Edit recipient #${recipient.id}` : "Add recipient",
-    description: recipient?.list_type === "dev_alert" ? "At least one active development/alert recipient must remain configured." : "Recipient details are restricted to Admin users.",
+    description: recipient?.list_type === "dev_alert" ? "At least one active development/alert recipient must remain configured." : "Recipient details are visible in this internal Admin tool.",
     fields: recipientFields, initial,
     onSave: async (payload) => {
       if (recipient) await api.put(`/recipients/${recipient.id}`, payload);
@@ -1046,14 +1070,14 @@ async function renderMail() {
     jsonText(provider.capabilities, "Not exposed"),
     pill(provider.breaker_state || "Unavailable", provider.breaker_state === "closed" ? "success" : "warning"),
     provider.credentials_configured === undefined ? "Hidden" : provider.credentials_configured ? "Set · write-only" : "Not set",
-    state.role === "admin" ? node("div", { class: "table-actions" }, [
+    node("div", { class: "table-actions" }, [
       button("Edit", () => editMailProvider(provider), "button button-quiet button-small"),
       button(provider.active ? "Disable" : "Enable", () => toggleMailProvider(provider), "button button-quiet button-small"),
       button("Test provider", () => testMailProvider(provider), "button button-primary button-small"),
-    ]) : "Read only",
+    ]),
   ]);
   const list = section("Provider chain", "Provider configuration is shared with NotificationService. This view does not probe providers.");
-  if (state.role === "admin") list.append(button("＋ Add provider", () => editMailProvider(), "button button-primary"));
+  list.append(button("＋ Add provider", () => editMailProvider(), "button button-primary"));
   list.append(makeTable(["Order · name", "Type", "State", "Capabilities", "Breaker", "Credentials", "Actions"], rows));
   const test = section("Send a test email", "This sends a real [TEST] message to the selected active development/alert recipient when connected to the Admin API.");
   const devs = (recipients.items || []).filter((recipient) => recipient.active);
@@ -1062,7 +1086,7 @@ async function renderMail() {
     node("label", { class: "field" }, [node("span", { text: "Development/alert recipient" }), selectNode("recipient_id", devs.map((r) => ({ value: r.id, label: r.email || `Recipient ${r.id}` })), devs[0]?.id), node("small", { class: "field-help", text: "Verify this address before sending. Server-side Test Mode and recipient checks remain authoritative." })]),
     field("Subject", "text", "Admin UI delivery test", { name: "subject", required: true }),
     field("Message", "textarea", "[TEST] Tender Intelligence mail provider verification.", { name: "text", required: true, wide: true }),
-    node("div", { class: "form-actions" }, node("button", { type: "submit", class: "button button-primary", disabled: state.role !== "admin" || !settings.test_mode || !devs.length, text: "Send [TEST] email" })),
+    node("div", { class: "form-actions" }, node("button", { type: "submit", class: "button button-primary", disabled: false || !settings.test_mode || !devs.length, text: "Send [TEST] email" })),
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1076,8 +1100,7 @@ async function renderMail() {
     } catch (error) { showMessage("error", errorMessage(error)); }
     finally { submit.disabled = false; }
   });
-  if (state.role === "admin") test.append(form);
-  else test.append(node("div", { class: "notice notice-info", text: "Test email is available to Admin users only." }));
+  test.append(form);
   if (!settings.test_mode) test.append(node("div", { class: "notice notice-danger", role: "alert", text: "Test Mode is OFF. The Admin API will refuse test-email sends." }));
   if (!devs.length) test.append(node("div", { class: "notice notice-warning", text: "No active development/alert recipient exists." }));
   content.replaceChildren(list, test);
@@ -1097,24 +1120,22 @@ const mailProviderFields = [
   { name: "reply_to", label: "Reply-to address" },
   { name: "priority", label: "Chain priority", type: "number", min: 1, step: 1, required: true },
   { name: "capabilities", label: "Provider capabilities (JSON)", type: "json", wide: true },
-  { name: "credentials", label: "Replace credentials (JSON)", type: "password", wide: true, help: "Credentials are write-only. Leave blank to keep current credentials." },
+  { name: "api_key", label: "Sendlib API key", type: "password", wide: true, help: "Write-only; encrypted when saved. Leave blank when editing to keep the current key." },
   { name: "active", label: "Provider active", type: "checkbox" },
 ];
 
 function editMailProvider(provider = null) {
-  const initial = { priority: 1, active: true, ...(provider || {}), credentials: "" };
+  const initial = { priority: 1, active: true, ...(provider || {}), api_key: "" };
   editorDialog({
     title: provider ? `Edit ${provider.name}` : "Add mail provider",
-    description: "Credentials are write-only and encrypted by the Admin API. Leave the field blank to retain existing credentials.",
+    description: "Enter the Sendlib API key in the password field. It is encrypted by the Admin API and never returned. Leave it blank when editing to retain the current key.",
     fields: mailProviderFields,
     initial,
     onSave: async (payload) => {
-      if (typeof payload.credentials === "string") {
-        if (payload.credentials.trim()) {
-          try { payload.credentials = JSON.parse(payload.credentials); }
-          catch { throw new Error("Credentials must be a JSON object."); }
-        } else delete payload.credentials;
-      }
+      const apiKey = typeof payload.api_key === "string" ? payload.api_key.trim() : "";
+      delete payload.api_key;
+      if (apiKey) payload.credentials = { api_key: apiKey };
+      else delete payload.credentials;
       if (provider) await api.put(`/mail/providers/${provider.id}`, payload);
       else await api.post("/mail/providers", payload);
       showMessage("success", isLive() ? "Mail provider configuration saved." : "Offline fixture provider updated in memory.");
@@ -1160,7 +1181,7 @@ async function renderTriage() {
     });
     grid.append(control);
   }
-  form.append(grid, node("div", { class: "form-actions" }, state.role === "admin" ? node("button", { class: "button button-primary", type: "submit", text: "Save triage configuration" }) : node("span", { class: "small-muted", text: "Viewer access is read-only." })));
+  form.append(grid, node("div", { class: "form-actions" }, node("button", { class: "button button-primary", type: "submit", text: "Save triage configuration" })));
   form.addEventListener("input", () => { state.dirty = true; });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1191,13 +1212,13 @@ async function renderSettings() {
   const stateSummary = node("div", { class: "notice notice-info" }, `Test Mode is ${data.test_mode ? "ON" : "OFF"}. Updated ${formatDate(data.updated_at)} · configuration version ${data.version ?? "unavailable"}.`);
   form.append(stateSummary);
   const grid = node("div", { class: "form-grid" });
-  grid.append(field("Test Mode", "checkbox", data.test_mode, { name: "test_mode", disabled: state.role !== "admin", help: "When ON, tender email is routed only to development recipients and marked [TEST]. Turning this OFF requires explicit confirmation and a reason." }));
-  grid.append(field("Reason for Test Mode change", "text", "", { name: "test_mode_reason", disabled: state.role !== "admin", help: "Required when turning Test Mode OFF." }));
-  grid.append(field("Monthly AI budget", "number", data.monthly_ai_budget, { name: "monthly_ai_budget", min: 0, step: 0.01, disabled: state.role !== "admin", help: data.monthly_ai_budget == null ? "Unset; no budget configured." : "Configured budget." }));
-  grid.append(field("Retention (months)", "number", data.retention_months, { name: "retention_months", min: 1, step: 1, disabled: state.role !== "admin" }));
-  grid.append(field("Link expiry (days)", "number", data.link_expiry_days, { name: "link_expiry_days", min: 1, step: 1, disabled: state.role !== "admin" }));
-  grid.append(field("KB token warning share (0–1)", "number", data.alert_thresholds?.kb_token_warning_share, { name: "kb_token_warning_share", min: 0, max: 1, step: 0.01, disabled: state.role !== "admin", help: "Fractional share at which a KB token-budget warning is raised." }));
-  form.append(grid, node("div", { class: "form-actions" }, state.role === "admin" ? node("button", { class: "button button-primary", type: "submit", text: "Save settings" }) : node("span", { class: "small-muted", text: "Viewer access is read-only." })));
+  grid.append(field("Test Mode", "checkbox", data.test_mode, { name: "test_mode", disabled: false, help: "When ON, tender email is routed only to development recipients and marked [TEST]. Turning this OFF requires explicit confirmation and a reason." }));
+  grid.append(field("Reason for Test Mode change", "text", "", { name: "test_mode_reason", disabled: false, help: "Required when turning Test Mode OFF." }));
+  grid.append(field("Monthly AI budget", "number", data.monthly_ai_budget, { name: "monthly_ai_budget", min: 0, step: 0.01, disabled: false, help: data.monthly_ai_budget == null ? "Unset; no budget configured." : "Configured budget." }));
+  grid.append(field("Retention (months)", "number", data.retention_months, { name: "retention_months", min: 1, step: 1, disabled: false }));
+  grid.append(field("Link expiry (days)", "number", data.link_expiry_days, { name: "link_expiry_days", min: 1, step: 1, disabled: false }));
+  grid.append(field("KB token warning share (0–1)", "number", data.alert_thresholds?.kb_token_warning_share, { name: "kb_token_warning_share", min: 0, max: 1, step: 0.01, disabled: false, help: "Fractional share at which a KB token-budget warning is raised." }));
+  form.append(grid, node("div", { class: "form-actions" }, node("button", { class: "button button-primary", type: "submit", text: "Save settings" })));
   form.addEventListener("input", () => { state.dirty = true; });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1268,21 +1289,17 @@ async function boot() {
   try {
     api = await createApi();
     state.live = api instanceof LiveAdminApi;
-    state.role = state.live ? (api.connectionState === "auth_required" ? "viewer" : api.role) : api.role;
     $("#connection-label").textContent = connectionLabel();
-    $("#actor-role").textContent = state.live ? `Role · ${state.role}` : `Preview role · ${state.role}`;
     $("#demo-chip").hidden = state.live;
     $("#demo-banner").hidden = state.live;
-    $("#demo-role-control").hidden = state.live;
     $("#scenario-control").hidden = state.live;
     $("#footer-state").textContent = state.live
       ? "Configuration and records are read from the Admin API."
       : "Offline fixtures only · edits remain in memory and are discarded on refresh.";
     if (!state.live) {
       for (const [value, label] of DEMO_SCENARIOS) scenarioSelect.append(node("option", { value }, label));
-      $("#demo-role").value = state.role;
       syncTestModeIndicator();
-    } else if (api.connectionState !== "auth_required") {
+    } else {
       try {
         const settings = await api.get("/settings");
         syncTestModeFromData(settings.test_mode);
@@ -1296,11 +1313,9 @@ async function boot() {
   } catch {
     state.live = false;
     api = new FixtureAdminApi();
-    state.role = api.role;
     $("#connection-label").textContent = connectionLabel();
     $("#demo-chip").hidden = false;
     $("#demo-banner").hidden = false;
-    $("#demo-role-control").hidden = false;
     $("#scenario-control").hidden = false;
     $("#footer-state").textContent = "Offline fixtures only · edits remain in memory and are discarded on refresh.";
     for (const [value, label] of DEMO_SCENARIOS) scenarioSelect.append(node("option", { value }, label));

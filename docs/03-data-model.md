@@ -30,7 +30,7 @@
 | `RunHistory` | Per-source crawl run summary. | Confirmed (§6.1, §7) |
 | `Settings` | System-wide toggles and thresholds. | Confirmed (§7) |
 | `ConfigChangeLog` | Audit trail of configuration changes (never secret values). | Confirmed (§7, §5.9.5) |
-| `AdminUser` | Admin app account. | Confirmed (§7) |
+| `AdminUser` | Historical/reserved account structure; unused by current Admin UI/API while application login is deferred (O11). | Deferred |
 | `KnowledgeBaseDoc` (phase 2) | Per-file metadata records for retrieval. | Deferred (phase 2/5, §5.5) |
 
 ---
@@ -147,11 +147,9 @@
 - **Fields (confirmed):** `id`, `actor`, `entity`, `entity_id`, `changed_fields` (never secret values), `created_at`.
 - **Security:** by design never stores secret values.
 
-### AdminUser
-- **Purpose:** admin-app account.
-- **Fields (confirmed):** `id`, `email`, `role` (`admin`/`viewer`), `active`.
-- **Confirmed constraints:** viewers never see KB or secrets; login method + who gets accounts is OPEN (`docs/13-open-decisions.md`).
-- **Security:** hash credentials the standard way `[PROPOSED]`; never log secrets.
+### AdminUser (reserved, not used)
+- The original v1.1 proposal listed `id`, `email`, `role` (`admin`/`viewer`), and `active`.
+- Current Admin UI/API does not create, resolve, or consume application identities. The model/migration are retained as historical schema artifacts; do not treat them as an active login requirement or delete migration history as part of O11's scope change.
 
 ---
 
@@ -165,7 +163,7 @@ Source 1─N RunHistory
 Source 1─N AlertEvent (optional)
 LLMRoleAssignment M─1 LLMProfile (+ fallback M─1)
 LLMCall M─1 LLMProfile (via role assignment)
-ConfigChangeLog M─1 (actor: AdminUser or env-seeded)
+ConfigChangeLog records the `internal-admin-api` channel actor while human login is deferred.
 ```
 
 ## 3.4 Audit requirements (applies to all)
@@ -178,8 +176,8 @@ ConfigChangeLog M─1 (actor: AdminUser or env-seeded)
 ## 3.5 Security considerations (applies to all)
 
 - Secrets: `Source.auth`, `LLMProfile.api_key`, `MailProvider.credentials` only — encrypted at rest, master key outside DB, write-only, never logged or returned by APIs.
-- KB content and verdicts: access-controlled; never sent to unapproved LLM profiles.
-- Document archive: only served via signed expiring links or authenticated routes.
+- KB content and verdicts: stored in the internal application data layer; never sent to unapproved LLM profiles. Admin API access follows the current internal deployment assumption while application login is deferred (O11).
+- Document archive: only served via signed expiring links; storage paths are never exposed.
 
 ## 3.6 v1.0 historical differences
 

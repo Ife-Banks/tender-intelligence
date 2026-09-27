@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, JSON, String
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tender_intelligence.db.base import Base, TimestampMixin
