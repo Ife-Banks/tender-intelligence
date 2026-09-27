@@ -95,7 +95,7 @@ class RequirementExtraction(BaseModel):
 class DocumentMapEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     location: StrictStr = Field(min_length=1, max_length=200)
-    quote: StrictStr = Field(min_length=1, max_length=500)
+    quote: StrictStr = Field(min_length=1, max_length=1000)
 
 
 class DocumentMapResult(BaseModel):
@@ -885,6 +885,15 @@ class VerdictEngine:
         summaries = []
         input_size = len(json.dumps(docs, ensure_ascii=False).encode("utf-8"))
         unavailable_count = sum(not doc.get("content") for doc in docs)
+        supplied_segments = [
+            segment
+            for document in docs
+            for segment in _split_document_content(
+                document.get("content") or [], DOCUMENT_MAP_CHUNK_CHARS
+            )
+        ]
+        supplied_locations = {str(segment.get("location")) for segment in supplied_segments}
+        supplied_characters = sum(len(segment.get("text", "")) for segment in supplied_segments)
         # Every document is mapped; no document is silently dropped.
         for doc in docs:
             if not doc.get("content"):
@@ -927,11 +936,64 @@ class VerdictEngine:
                                 DocumentMapResult.model_json_schema(), separators=(",", ":")
                             )
                             + " Evidence quotes must be copied from the supplied segment. "
-                            "Do not cite omitted content or invent missing requirements."
+                            "Do not cite omitted content or invent missing requirements. "
+                            "Return only the JSON object. Do not use Markdown fences or add "
+                            "commentary."
                         ),
                     ),
                     LLMMessage(role="user", content=json.dumps(map_doc, ensure_ascii=False)),
                 ]
+                effective_reasoning_budget = (
+                    min(profile.reasoning_budget, map_output)
+                    if profile.enable_thinking and profile.reasoning_budget is not None
+                    else None
+                )
+                log.info(
+                    "Stage B document map request prepared",
+                    extra={
+                        "stage": "verdict",
+                        "status": "document_map_request",
+                        "correlation_id": tender.correlation_id,
+                        "tender_id": tender.id,
+                        "extra": {
+                            "document_id": doc.get("document_id"),
+                            "segment_index": segment_index,
+                            "segment_count": len(source_segments),
+                            "reduced_document_count": sum(
+                                bool(item.get("content")) for item in docs
+                            ),
+                            "reduced_segment_count": len(supplied_segments),
+                            "reduced_character_count": supplied_characters,
+                            "reduced_token_estimate": _estimate_tokens(
+                                json.dumps(docs, ensure_ascii=False)
+                            ),
+                            "unavailable_document_count": unavailable_count,
+                            "supplied_document_ids": [
+                                item.get("document_id") for item in docs
+                                if item.get("content")
+                            ],
+                            "supplied_location_count": len(supplied_locations),
+                            "prompt_char_count": sum(
+                                len(message.content) for message in map_messages
+                            ),
+                            "prompt_token_estimate": _estimate_tokens(
+                                "\n".join(message.content for message in map_messages)
+                            ),
+                            "schema_instructions_present": "JSON Schema" in map_messages[0].content,
+                            "response_format_capability": bool(profile.supports_response_format),
+                            "response_format_requested": bool(profile.supports_response_format),
+                            "temperature": profile.temperature,
+                            "top_p": profile.top_p,
+                            "max_output_tokens": map_output,
+                            "thinking_enabled": bool(profile.enable_thinking),
+                            "reasoning_budget": effective_reasoning_budget,
+                            "reasoning_effort_supported": bool(profile.supports_reasoning_effort),
+                            "reasoning_effort": profile.reasoning_effort,
+                            "stop_parameters_configured": False,
+                            "reduced_segment_char_count": len(segment.get("text", "")),
+                        },
+                    },
+                )
                 response, _, error = self._invoke_with_policy(
                     tender, profile, None, map_messages, map_output
                 )
@@ -941,20 +1003,59 @@ class VerdictEngine:
                     return docs, self._document_map_error(
                         tender, "document_map_provider_response_truncated", response
                     )
+                correction_used = False
                 try:
                     data = json.loads(response.content)
-                except (json.JSONDecodeError, TypeError):
-                    return docs, self._document_map_error(
-                        tender, "document_map_malformed_json", response
+                except (json.JSONDecodeError, TypeError) as parse_exc:
+                    parse_error = self._document_map_error(
+                        tender,
+                        "document_map_malformed_json",
+                        response,
+                        parse_error=parse_exc,
                     )
+                    correction = map_messages + [
+                        LLMMessage(role="assistant", content=response.content),
+                        LLMMessage(
+                            role="user",
+                            content=(
+                                "The previous response was not valid JSON. Return only one JSON "
+                                "object matching the supplied JSON Schema exactly. Do not use "
+                                "Markdown fences or commentary. Copy evidence quotes verbatim "
+                                "from the supplied segment and do not invent content."
+                            ),
+                        ),
+                    ]
+                    response, _, retry_error = self._invoke_with_policy(
+                        tender, profile, None, correction, map_output
+                    )
+                    correction_used = True
+                    if retry_error:
+                        return docs, parse_error
+                    if (response.raw or {}).get("finish_reason") == "length":
+                        return docs, self._document_map_error(
+                            tender, "document_map_provider_response_truncated", response
+                        )
+                    try:
+                        data = json.loads(response.content)
+                    except (json.JSONDecodeError, TypeError) as retry_parse_exc:
+                        return docs, self._document_map_error(
+                            tender,
+                            "document_map_malformed_json",
+                            response,
+                            parse_error=retry_parse_exc,
+                        )
                 try:
                     mapped = DocumentMapResult.model_validate(data)
+                    # Safety net: truncate overlong but valid quotes before further validation
+                    mapped = _truncate_overlong_quotes(mapped, segment["text"])
                 except ValidationError as exc:
                     errors = exc.errors()
                     code = _document_map_validation_code(errors, data)
                     self._document_map_error(
                         tender, code, response, parsed_data=data, validation_errors=errors
                     )
+                    if correction_used:
+                        return docs, code
                     # Match the existing Stage B correction policy: one bounded
                     # validation retry, with local field/type diagnostics only.
                     correction = map_messages + [
@@ -982,6 +1083,8 @@ class VerdictEngine:
                     try:
                         data = json.loads(response.content)
                         mapped = DocumentMapResult.model_validate(data)
+                        # Safety net: truncate overlong but valid quotes before further validation
+                        mapped = _truncate_overlong_quotes(mapped, segment["text"])
                     except (json.JSONDecodeError, TypeError):
                         return docs, self._document_map_error(
                             tender, "document_map_malformed_json", response
@@ -1128,8 +1231,10 @@ class VerdictEngine:
         validation_errors=None,
         schema_validation_succeeded=False,
         reference_details=None,
+        parse_error=None,
     ):
         """Log response diagnostics without retaining prompt or completion contents."""
+        response_diagnostics = _response_content_diagnostics(response.content, parse_error)
         log.warning(
             "Stage B document map validation failed",
             extra={
@@ -1143,10 +1248,29 @@ class VerdictEngine:
                     "response_bytes": (response.raw or {}).get(
                         "response_bytes", len(response.content.encode("utf-8"))
                     ),
+                    **response_diagnostics,
+                    "request_config": _safe_request_diagnostics(
+                        (response.raw or {}).get("request_config")
+                    ),
+                    "response_extraction": _safe_response_extraction_diagnostics(
+                        response.raw
+                    ),
                     "provider_finish_reason": (response.raw or {}).get("finish_reason"),
-                    "json_parse_succeeded": code != "document_map_malformed_json",
+                    "provider_prompt_tokens_reported": getattr(
+                        getattr(response, "usage", None), "prompt_tokens", None
+                    ),
+                    "provider_completion_tokens_reported": getattr(
+                        getattr(response, "usage", None), "completion_tokens", None
+                    ),
+                    "json_parse_succeeded": response_diagnostics[
+                        "response_json_parse_succeeded"
+                    ],
                     "schema_validation_succeeded": schema_validation_succeeded,
-                    "parsed_response_shape": _safe_json_shape(parsed_data),
+                    "parsed_response_shape": (
+                        _safe_json_shape(parsed_data)
+                        if response_diagnostics["response_json_parse_succeeded"]
+                        else response_diagnostics["response_shape_preview"]
+                    ),
                     "validation_issues": _safe_validation_shape(validation_errors or []),
                     "reference_details": reference_details,
                 },
@@ -1271,6 +1395,104 @@ def _split_document_content(chunks: list[dict[str, str]], max_chars: int):
     return result
 
 
+def _response_content_diagnostics(
+    content: str, parse_error: json.JSONDecodeError | None = None
+) -> dict[str, Any]:
+    """Classify response text without retaining any response values."""
+    text = content if isinstance(content, str) else ""
+    stripped = text.strip()
+    parse_succeeded = False
+    parsed_shape = None
+    local_error = parse_error
+    if local_error is None:
+        try:
+            parsed = json.loads(text)
+            parse_succeeded = True
+            parsed_shape = _safe_json_shape(parsed)
+        except (json.JSONDecodeError, TypeError) as exc:
+            local_error = exc if isinstance(exc, json.JSONDecodeError) else None
+
+    first = stripped[0] if stripped else ""
+    last = stripped[-1] if stripped else ""
+
+    def structural_character(character: str) -> str | None:
+        if not character:
+            return None
+        if character in "{}[]`\\\"'":
+            return character
+        return "<redacted_character>"
+
+    starts_fence = stripped.startswith("```")
+    if parse_succeeded:
+        structure = (parsed_shape or {}).get("kind", "unknown")
+    elif not stripped:
+        structure = "empty_or_whitespace"
+    elif starts_fence:
+        structure = "markdown_fenced"
+    elif first == "{":
+        near_end = local_error and local_error.pos >= len(text.rstrip()) - 1
+        structure = "incomplete_json_object" if near_end else "malformed_json_object"
+    elif first == "[":
+        near_end = local_error and local_error.pos >= len(text.rstrip()) - 1
+        structure = "incomplete_json_array" if near_end else "malformed_json_array"
+    else:
+        structure = "plain_text_or_unrecognized_json"
+
+    error_category = None
+    if local_error:
+        message = local_error.msg.casefold()
+        if "unterminated" in message or "expecting value" in message:
+            error_category = "unexpected_end_or_missing_value"
+        elif "property name" in message:
+            error_category = "invalid_or_missing_property_name"
+        elif "escape" in message:
+            error_category = "invalid_escape"
+        elif "extra data" in message:
+            error_category = "extra_data"
+        else:
+            error_category = "invalid_json_syntax"
+
+    return {
+        "response_char_count": len(text),
+        "response_first_non_whitespace_character": structural_character(first),
+        "response_last_non_whitespace_character": structural_character(last),
+        "response_starts_with_json_object": first == "{",
+        "response_starts_with_json_array": first == "[",
+        "response_starts_with_markdown_fence": starts_fence,
+        "response_contains_markdown_fence": "```" in text,
+        "response_is_empty_or_whitespace": not stripped,
+        "response_json_parse_succeeded": parse_succeeded,
+        "response_json_parse_error_category": error_category,
+        "response_json_parse_error_position": local_error.pos if local_error else None,
+        "response_json_parse_error_message_sanitized": error_category,
+        "response_shape_preview": parsed_shape or {"kind": structure},
+    }
+
+
+def _safe_request_diagnostics(request_config: Any) -> dict[str, Any] | None:
+    """Whitelist nonsensitive request settings for failure logs."""
+    if not isinstance(request_config, dict):
+        return None
+    allowed = {
+        "temperature", "top_p", "max_tokens", "enable_thinking", "reasoning_budget",
+        "reasoning_effort", "supports_response_format", "response_format_requested",
+        "supports_include_reasoning", "supports_chat_template_kwargs",
+        "supports_reasoning_effort", "stop_parameters_configured",
+    }
+    return {key: request_config[key] for key in allowed if key in request_config}
+
+
+def _safe_response_extraction_diagnostics(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    allowed = {
+        "choice_count", "selected_choice_index", "message_content_field_present",
+        "message_content_type", "reasoning_field_present", "refusal_field_present",
+        "tool_calls_field_present",
+    }
+    return {key: raw[key] for key in allowed if key in raw}
+
+
 def _safe_validation_shape(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Expose schema paths/types while excluding all rejected input values."""
     safe = []
@@ -1291,6 +1513,37 @@ def _safe_validation_shape(errors: list[dict[str, Any]]) -> list[dict[str, Any]]
             "actual_type": type(actual).__name__ if "input" in error else None,
         })
     return safe
+
+
+def _truncate_overlong_quotes(
+    mapped: DocumentMapResult, segment_text: str, max_quote_length: int = 1000
+) -> DocumentMapResult:
+    """
+    Safety net: if a quote is a valid substring but exceeds max_length, truncate it
+    to max_length. A prefix of a verbatim quote is still verbatim/findable.
+    
+    This avoids depending on model compliance for something we can fix deterministically.
+    """
+    normalized_segment = _normalize_text(segment_text)
+    truncated_evidence = []
+    
+    for ev in mapped.evidence:
+        quote = ev.quote
+        normalized_quote = _normalize_text(quote)
+        
+        # If quote is valid but overlong, truncate to max_length
+        if len(quote) > max_quote_length and normalized_quote in normalized_segment:
+            quote = quote[:max_quote_length]
+        
+        truncated_evidence.append(
+            DocumentMapEvidence(location=ev.location, quote=quote)
+        )
+    
+    return DocumentMapResult(
+        summary=mapped.summary,
+        evidence=truncated_evidence
+    )
+
 
 
 def _safe_json_shape(value: Any, depth: int = 2) -> dict[str, Any] | None:

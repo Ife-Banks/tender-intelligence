@@ -212,6 +212,40 @@ def test_include_reasoning_capability_false_hides_reasoning_field(monkeypatch):
     assert "reasoning" not in result.raw
 
 
+def test_openai_compatible_client_extracts_only_message_content(monkeypatch):
+    """The generic client does not substitute hidden reasoning for content."""
+    import tender_intelligence.interfaces.openai_compatible as module
+
+    monkeypatch.setattr(module.httpx2, "Client", _Client)
+    model_content = "This is the actual completion text."
+    _Client.response = _Response(
+        200,
+        {
+            "model": "test-model-v1",
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "content": model_content,
+                    "reasoning_content": "synthetic hidden reasoning must not be used",
+                },
+            }],
+        },
+    )
+    result = OpenAICompatibleClient(_profile(), "not-a-real-key").chat(
+        [LLMMessage("user", "Return JSON")], max_tokens=32
+    )
+
+    assert result.content == model_content
+    assert result.raw["response_bytes"] == len(model_content.encode("utf-8"))
+    assert result.raw["finish_reason"] == "stop"
+    assert "reasoning_content" not in result.raw
+    assert result.raw["message_content_field_present"] is True
+    assert result.raw["message_content_type"] == "str"
+    assert result.raw["reasoning_field_present"] is True
+    assert result.raw["request_config"]["max_tokens"] == 32
+    assert result.raw["request_config"]["response_format_requested"] is True
+
+
 def test_read_timeout_before_response_headers_is_classified_precisely(monkeypatch):
     import tender_intelligence.interfaces.openai_compatible as module
 
@@ -429,7 +463,8 @@ def test_groq_gpt_oss_successful_response_content_returned(monkeypatch):
     assert result.usage.prompt_tokens == 20
     assert result.usage.completion_tokens == 8
     # Raw contains only safe diagnostics
-    assert "content" not in str(result.raw)
+    assert expected_content not in str(result.raw)
+    assert result.raw["message_content_field_present"] is True
 
 
 # Test F — Final Stage B verdict schema unchanged (VerdictPayload still validates)

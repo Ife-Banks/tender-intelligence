@@ -36,6 +36,7 @@ from tender_intelligence.verdict.service import (
     VerdictEngine,
     _bundle_documents,
     _document_map_validation_code,
+    _response_content_diagnostics,
     _safe_json_shape,
     format_verdict,
 )
@@ -333,6 +334,78 @@ def test_document_map_validation_reports_specific_failure(
     )
     _mapped, error = engine._map_documents(tender, profile, docs, "", None, {}, False)
     assert error == expected
+
+
+def test_malformed_document_map_gets_exactly_one_json_correction(db_session, tmp_path, caplog):
+    tender, profile, _, storage, _ = _environment(db_session, tmp_path)
+    docs = _bundle_documents(_document_bundle(tender.id))
+    observed = []
+    client = _ScriptedClient([
+        '{"summary":',
+        json.dumps({"summary": "Synthetic fixture summary.", "evidence": []}),
+    ], observed, profile.id)
+
+    mapped, error = VerdictEngine(
+        db_session, storage, lambda _: client, sleeper=lambda _: None
+    )._map_documents(tender, profile, docs, "", None, {}, False)
+
+    assert error is None
+    assert mapped
+    assert len(observed) == 2
+    assert "Return only one JSON object" in observed[1][1][-1].content
+    diagnostic = next(
+        record.extra for record in caplog.records
+        if getattr(record, "error_code", None) == "document_map_malformed_json"
+    )
+    assert diagnostic["response_bytes"] == len(b'{"summary":')
+    assert diagnostic["response_shape_preview"]["kind"] == "incomplete_json_object"
+    assert "summary" not in json.dumps(diagnostic)
+
+
+def test_malformed_document_map_correction_is_bounded(db_session, tmp_path):
+    tender, profile, _, storage, _ = _environment(db_session, tmp_path)
+    docs = _bundle_documents(_document_bundle(tender.id))
+    observed = []
+    client = _ScriptedClient(["plain text", "still not json"], observed, profile.id)
+
+    _mapped, error = VerdictEngine(
+        db_session, storage, lambda _: client, sleeper=lambda _: None
+    )._map_documents(tender, profile, docs, "", None, {}, False)
+
+    assert error == "document_map_malformed_json"
+    assert len(observed) == 2
+
+
+@pytest.mark.parametrize(
+    ("content", "structure"),
+    [
+        ("   ", "empty_or_whitespace"),
+        ('```json\n{}\n```', "markdown_fenced"),
+        ('{"summary":', "incomplete_json_object"),
+        ("ordinary text", "plain_text_or_unrecognized_json"),
+        ("null", "null"),
+        ("[]", "array"),
+    ],
+)
+def test_response_diagnostics_classify_without_exposing_content(content, structure):
+    diagnostics = _response_content_diagnostics(content)
+
+    assert diagnostics["response_shape_preview"]["kind"] == structure
+    assert diagnostics["response_char_count"] == len(content)
+    assert "response_json_parse_error_message_sanitized" in diagnostics
+    assert "response_content" not in diagnostics
+    assert "raw_response" not in diagnostics
+
+
+def test_response_diagnostics_redact_short_plain_text():
+    synthetic_response = "private fixture text " + "x" * 19
+    assert len(synthetic_response.encode("utf-8")) == 40
+
+    diagnostics = _response_content_diagnostics(synthetic_response)
+
+    assert diagnostics["response_char_count"] == 40
+    assert diagnostics["response_shape_preview"]["kind"] == "plain_text_or_unrecognized_json"
+    assert "private fixture text" not in json.dumps(diagnostics)
 
 
 @pytest.mark.parametrize(

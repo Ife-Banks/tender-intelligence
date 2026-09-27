@@ -58,6 +58,14 @@ class OpenAICompatibleClient(LLMClient):
             "enable_thinking": bool(self._profile.enable_thinking),
             "reasoning_budget": self._effective_reasoning_budget(effective_max_tokens),
             "reasoning_effort": self._profile.reasoning_effort,
+            "supports_response_format": bool(self._profile.supports_response_format),
+            "response_format_requested": bool(self._profile.supports_response_format),
+            "supports_include_reasoning": bool(self._profile.supports_include_reasoning),
+            "supports_chat_template_kwargs": bool(
+                self._profile.supports_chat_template_kwargs
+            ),
+            "supports_reasoning_effort": bool(self._profile.supports_reasoning_effort),
+            "stop_parameters_configured": "stop" in body,
         }
         response_headers_received = False
         # Capability-based thinking control: some providers use chat_template_kwargs
@@ -129,6 +137,17 @@ class OpenAICompatibleClient(LLMClient):
                     "provider_http_status": response.status_code,
                     "finish_reason": finish_reason,
                     "response_bytes": len(content.encode("utf-8")),
+                    "choice_count": len(choices),
+                    "selected_choice_index": 0 if choices else None,
+                    "message_content_field_present": isinstance(message, dict)
+                    and "content" in message,
+                    "message_content_type": type(content).__name__,
+                    "reasoning_field_present": isinstance(message, dict)
+                    and any(key in message for key in ("reasoning", "reasoning_content")),
+                    "refusal_field_present": isinstance(message, dict) and "refusal" in message,
+                    "tool_calls_field_present": (
+                        isinstance(message, dict) and "tool_calls" in message
+                    ),
                 },
             )
         except LLMError:
