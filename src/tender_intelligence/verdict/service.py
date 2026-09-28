@@ -415,14 +415,27 @@ class VerdictEngine:
                     },
                 },
             )
+            # Capture validation error details for better retry guidance
+            validation_error_msg = None
+            try:
+                _validate_requirement_sources(extraction, docs)
+            except (ValueError, TypeError) as ve:
+                validation_error_msg = str(ve)
+                raise
+            
             retry_messages = extraction_messages + [
                 LLMMessage(role="assistant", content=extracted_response.content),
                 LLMMessage(
                     role="user",
                     content=(
-                        "Correct the requirement extraction. Return only material tender "
-                        "requirements with exact source quotes and valid document locations. "
-                        "Return JSON only."
+                        "Correct the requirement extraction based on these validation errors:\n\n"
+                        f"{validation_error_msg}\n\n"
+                        "Rules:\n"
+                        "- Each 'location' must be exactly ONE value from the document's valid locations\n"
+                        "- Never combine locations with commas (e.g., 'section:23, 24' is invalid)\n"
+                        "- Quotes must be contiguous text - never use ellipses (...) or (…)\n"
+                        "- Each quote must exist verbatim in the source document\n\n"
+                        "Return corrected JSON only."
                     ),
                 ),
             ]
@@ -1748,12 +1761,15 @@ def _requirement_messages(
                 "company.\n\n"
                 "Output ONLY a JSON object matching this EXACT structure:\n"
                 + json.dumps(example_output, indent=2, ensure_ascii=False)
-                + "\n\nRules:\n"
-                "- Each requirement must cite one or more exact document quotes and their "
-                "existing document_id/location.\n"
-                "- Do not invent requirements or locations.\n"
-                "- Do not cite content listed as omitted in the supplied context manifest.\n"
-                "- Output only valid JSON - no markdown fences, no explanations."
+                + "\n\n**CRITICAL CITATION RULES:**\n"
+                "- Each 'location' value must be EXACTLY ONE location from the document\n"
+                "- NEVER combine multiple locations with commas (e.g., 'section:23, 24' is INVALID)\n"
+                "- If a requirement spans multiple sections, create separate evidence entries\n"
+                "- Each 'quote' must be CONTIGUOUS text from the source - NO ellipses (...) or (…)\n"
+                "- Quotes must exist verbatim in the source document at the cited location\n"
+                "- Do not invent requirements, locations, or paraphrase quotes\n"
+                "- Do not cite content listed as omitted in the supplied context manifest\n\n"
+                "Output only valid JSON - no markdown fences, no explanations."
             ),
         ),
         LLMMessage(
@@ -1893,9 +1909,12 @@ def _validate_requirement_sources(extraction: RequirementExtraction, source_docs
                 # Level 1: exact match within the cited chunk
                 # Level 2: normalized match within the cited chunk
                 # Level 3: normalized match within the full document text (handles cross-chunk quotes)
+                # Level 4: ellipsis-fragmented match (handle quotes with ... or … for brevity)
                 norm_quote = _normalize_text(evidence.quote)
                 norm_chunk = _normalize_text(text)
                 norm_doc = _normalize_text(doc_full_text.get(document_id, ""))
+                
+                # Standard match attempts
                 if (
                     evidence.quote in text
                     or (norm_quote and norm_quote in norm_chunk)
@@ -1903,26 +1922,49 @@ def _validate_requirement_sources(extraction: RequirementExtraction, source_docs
                 ):
                     matched = True
                     break
-            if not matched:
-                import sys as _sys
-                import json as _json
-                print(f"\n🔴 QUOTE MISMATCH DEBUG", file=_sys.stderr)
-                print(f"  document_id: {evidence.document_id}", file=_sys.stderr)
-                print(f"  location:    {evidence.location}", file=_sys.stderr)
-                print(f"  split locs:  {evidence_locations}", file=_sys.stderr)
-                print(f"  quote:       {repr(evidence.quote[:200])}", file=_sys.stderr)
-                # Find the matching location in valid_refs to compare
-                found_any_location = False
-                for doc_id, loc, text in valid_refs:
-                    if doc_id == evidence.document_id and loc in evidence_locations:
-                        print(f"  source text: {repr(text[:200])}", file=_sys.stderr)
-                        found_any_location = True
+                
+                # Level 4: Handle ellipses - split on ... or … and verify fragments in order
+                import re as _re
+                fragments = [
+                    f.strip() 
+                    for f in _re.split(r'\.{3,}|…', evidence.quote) 
+                    if len(f.strip()) > 15  # Only check substantial fragments
+                ]
+                if fragments and norm_doc:
+                    pos = 0
+                    all_found = True
+                    for frag in fragments:
+                        norm_frag = _normalize_text(frag)
+                        if not norm_frag:
+                            continue
+                        idx = norm_doc.find(norm_frag, pos)
+                        if idx < 0:
+                            all_found = False
+                            break
+                        pos = idx + len(norm_frag)
+                    if all_found and fragments:
+                        matched = True
                         break
-                if not found_any_location:
-                    matching_locs = [loc for doc_id, loc, _ in valid_refs if doc_id == evidence.document_id]
-                    print(f"  ❌ none of the split locations found in valid_refs!", file=_sys.stderr)
-                    print(f"  available locations for doc {evidence.document_id}: {sorted(matching_locs)[:20]}", file=_sys.stderr)
-                raise ValueError("requirement source evidence is invalid")
+            
+            if not matched:
+                # Build detailed error message for retry
+                available_locs = sorted({
+                    loc for doc_id, loc, _ in valid_refs 
+                    if doc_id == evidence.document_id
+                })
+                error_details = (
+                    f"Requirement '{requirement.requirement[:80]}...' has invalid citation:\n"
+                    f"  - document_id: {evidence.document_id}\n"
+                    f"  - location: {evidence.location}\n"
+                )
+                if ',' in evidence.location:
+                    error_details += f"  ❌ Location contains comma. Use single location only.\n"
+                if not any(loc in evidence_locations for loc in available_locs):
+                    error_details += f"  ❌ Location not found. Valid locations: {', '.join(available_locs[:10])}\n"
+                if '...' in evidence.quote or '…' in evidence.quote:
+                    error_details += f"  ⚠️ Quote contains ellipses - use contiguous text only.\n"
+                error_details += f"  - quote preview: {evidence.quote[:150]}\n"
+                raise ValueError(error_details)
 
 
 def _apply_authoritative_overrides(payload, material_requirements, deadline):
