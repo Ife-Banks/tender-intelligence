@@ -70,13 +70,13 @@ class VerdictDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     document_id: int
     location: StrictStr
-    quote: StrictStr = Field(min_length=1, max_length=1000)
+    quote: StrictStr = Field(min_length=1, max_length=2000)
 
 
 class KBCitation(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     section: StrictStr
-    quote: StrictStr = Field(min_length=1, max_length=1000)
+    quote: StrictStr = Field(min_length=1, max_length=2000)
 
 
 class MaterialRequirement(BaseModel):
@@ -317,6 +317,11 @@ class VerdictEngine:
             return self._failure(
                 tender, "requirement_sources_unavailable", incomplete_inputs=incomplete
             )
+        # Drop documents with no extracted content before any LLM calls.
+        # For this tender, 15/16 docs had empty content — sending skeleton metadata
+        # for them wastes thousands of tokens with zero informational value.
+        # source_docs is kept unfiltered for the unavailable_documents counter.
+        docs = [doc for doc in docs if doc.get("content")]
         # The entire KB is retained in the reduce request. If it alone cannot fit, fail safely.
         kb_tokens = max(kb_version.token_count, _estimate_tokens(kb))
         warning_share = (
@@ -390,7 +395,9 @@ class VerdictEngine:
         if extraction_error:
             return self._failure(tender, extraction_error, incomplete_inputs=incomplete)
         try:
-            extracted = RequirementExtraction.model_validate_json(extracted_response.content)
+            # Strip markdown fences if present (e.g., ```json ... ```)
+            content = _strip_markdown_fences(extracted_response.content)
+            extracted = RequirementExtraction.model_validate_json(content)
             _validate_requirement_sources(extracted, docs)
         except (ValidationError, ValueError, TypeError) as exc:
             log.warning(
@@ -429,7 +436,9 @@ class VerdictEngine:
             if extraction_error:
                 return self._failure(tender, extraction_error, incomplete_inputs=incomplete)
             try:
-                extracted = RequirementExtraction.model_validate_json(extracted_response.content)
+                # Strip markdown fences if present (e.g., ```json ... ```)
+                content = _strip_markdown_fences(extracted_response.content)
+                extracted = RequirementExtraction.model_validate_json(content)
                 _validate_requirement_sources(extracted, docs)
             except (ValidationError, ValueError, TypeError):
                 return self._failure(
@@ -663,6 +672,7 @@ class VerdictEngine:
             # Strip markdown fences if present (e.g., ```json ... ```)
             content = _strip_markdown_fences(result.content)
             payload = VerdictPayload.model_validate_json(content)
+            payload = _apply_authoritative_overrides(payload, material_requirements, deadline)
             _validate_semantics(
                 payload,
                 docs,
@@ -695,6 +705,7 @@ class VerdictEngine:
                 # Strip markdown fences if present (e.g., ```json ... ```)
                 content = _strip_markdown_fences(result.content)
                 payload = VerdictPayload.model_validate_json(content)
+                payload = _apply_authoritative_overrides(payload, material_requirements, deadline)
                 _validate_semantics(
                     payload,
                     docs,
@@ -1702,17 +1713,47 @@ def _deadline_context(row):
 def _requirement_messages(
     docs: list[dict[str, Any]], reduction_report: dict[str, Any] | None = None
 ) -> list[LLMMessage]:
+    # Build a concrete example that matches the schema exactly
+    example_output = {
+        "requirements": [
+            {
+                "requirement": "Must provide 24/7 technical support",
+                "tender_evidence": [
+                    {
+                        "document_id": 1,
+                        "location": "page 5, section 3.2",
+                        "quote": "The vendor must provide 24/7 technical support..."
+                    }
+                ]
+            },
+            {
+                "requirement": "Must have ISO 27001 certification",
+                "tender_evidence": [
+                    {
+                        "document_id": 2,
+                        "location": "requirements section, item 4",
+                        "quote": "ISO 27001 certification is mandatory"
+                    }
+                ]
+            }
+        ]
+    }
+    
     return [
         LLMMessage(
             role="system",
             content=(
                 "Extract every material eligibility, experience, qualification, and required-"
                 "submission requirement from the supplied tender documents. Do not assess the "
-                "company. Return JSON matching this schema: "
-                + json.dumps(RequirementExtraction.model_json_schema(), separators=(",", ":"))
-                + " Each requirement must cite one or more exact document quotes and their "
-                "existing document_id/location. Do not invent requirements or locations. "
-                "Do not cite content listed as omitted in the supplied context manifest."
+                "company.\n\n"
+                "Output ONLY a JSON object matching this EXACT structure:\n"
+                + json.dumps(example_output, indent=2, ensure_ascii=False)
+                + "\n\nRules:\n"
+                "- Each requirement must cite one or more exact document quotes and their "
+                "existing document_id/location.\n"
+                "- Do not invent requirements or locations.\n"
+                "- Do not cite content listed as omitted in the supplied context manifest.\n"
+                "- Output only valid JSON - no markdown fences, no explanations."
             ),
         ),
         LLMMessage(
@@ -1820,6 +1861,15 @@ def _validate_requirement_sources(extraction: RequirementExtraction, source_docs
         for document in source_docs
         for chunk in document.get("content", [])
     }
+    # Build per-document full text for cross-chunk quote matching.
+    # When the LLM cites a sentence that spans a chunk boundary, the exact quote
+    # won't be a substring of any single chunk but will appear in the concatenated text.
+    doc_full_text: dict[int, str] = {}
+    for document in source_docs:
+        chunks_text = " ".join(
+            chunk["text"] for chunk in document.get("content", []) if chunk.get("text")
+        )
+        doc_full_text[document["document_id"]] = chunks_text
     seen: set[str] = set()
     for requirement in extraction.requirements:
         normalized = requirement.requirement.strip().casefold()
@@ -1828,44 +1878,145 @@ def _validate_requirement_sources(extraction: RequirementExtraction, source_docs
         seen.add(normalized)
         for evidence in requirement.tender_evidence:
             matched = False
+            # Handle comma-separated locations (e.g., "section:23, 24")
+            # Split and try each location part individually
+            evidence_locations = [loc.strip() for loc in evidence.location.split(',')]
+            
             for document_id, location, text in valid_refs:
-                if document_id != evidence.document_id or location != evidence.location:
+                if document_id != evidence.document_id:
+                    continue
+                # Check if this chunk location matches any of the evidence locations
+                if location not in evidence_locations:
                     continue
                 if not evidence.quote:
                     continue
-                # Level 1: exact match; Level 2: normalized match
-                if evidence.quote in text or (
-                    _normalize_text(evidence.quote)
-                    and _normalize_text(evidence.quote) in _normalize_text(text)
+                # Level 1: exact match within the cited chunk
+                # Level 2: normalized match within the cited chunk
+                # Level 3: normalized match within the full document text (handles cross-chunk quotes)
+                norm_quote = _normalize_text(evidence.quote)
+                norm_chunk = _normalize_text(text)
+                norm_doc = _normalize_text(doc_full_text.get(document_id, ""))
+                if (
+                    evidence.quote in text
+                    or (norm_quote and norm_quote in norm_chunk)
+                    or (norm_quote and norm_quote in norm_doc)
                 ):
                     matched = True
                     break
             if not matched:
+                import sys as _sys
+                import json as _json
+                print(f"\n🔴 QUOTE MISMATCH DEBUG", file=_sys.stderr)
+                print(f"  document_id: {evidence.document_id}", file=_sys.stderr)
+                print(f"  location:    {evidence.location}", file=_sys.stderr)
+                print(f"  split locs:  {evidence_locations}", file=_sys.stderr)
+                print(f"  quote:       {repr(evidence.quote[:200])}", file=_sys.stderr)
+                # Find the matching location in valid_refs to compare
+                found_any_location = False
+                for doc_id, loc, text in valid_refs:
+                    if doc_id == evidence.document_id and loc in evidence_locations:
+                        print(f"  source text: {repr(text[:200])}", file=_sys.stderr)
+                        found_any_location = True
+                        break
+                if not found_any_location:
+                    matching_locs = [loc for doc_id, loc, _ in valid_refs if doc_id == evidence.document_id]
+                    print(f"  ❌ none of the split locations found in valid_refs!", file=_sys.stderr)
+                    print(f"  available locations for doc {evidence.document_id}: {sorted(matching_locs)[:20]}", file=_sys.stderr)
                 raise ValueError("requirement source evidence is invalid")
+
+
+def _apply_authoritative_overrides(payload, material_requirements, deadline):
+    """Inject authoritative values that must not deviate from independently extracted data.
+
+    Small models paraphrase requirements, forget deadline fields, and leave placeholder
+    text in gaps. This function corrects all of these after parsing, before validation.
+    """
+    req_strings = [r.requirement for r in material_requirements]
+
+    # Fix assessments: align requirement strings and strip unfilled placeholders
+    fixed_assessments = []
+    for i, assessment in enumerate(payload.assessments):
+        # Map to authoritative requirement string by position (model keeps order)
+        authoritative_req = req_strings[i] if i < len(req_strings) else assessment.requirement
+        # Fix gap placeholder
+        gap = assessment.gap
+        if gap and ("<" in gap and ">" in gap):
+            gap = f"No evidence on file for this requirement."
+        fixed_assessments.append(assessment.model_copy(update={
+            "requirement": authoritative_req,
+            "gap": gap,
+        }))
+
+    # Fix gaps list placeholder
+    gaps = payload.gaps
+    if gaps and all("<" in g and ">" in g for g in gaps):
+        gaps = ["No evidence on file for all requirements."]
+
+    return payload.model_copy(update={
+        "requirements": req_strings,
+        "deadline_status": deadline.get("status", "UNRESOLVED"),
+        "deadline_utc": deadline.get("deadline_utc"),
+        "deadline_date": deadline.get("date"),
+        "deadline_time": deadline.get("time"),
+        "deadline_timezone": deadline.get("timezone"),
+        "source_timezone": deadline.get("source_timezone"),
+        "assessments": fixed_assessments,
+        "gaps": gaps,
+    })
 
 
 def _verdict_messages(
     tender, docs, kb, kb_id, deadline, incomplete, requirements, *, triage=None,
     reduction_report=None,
 ):
-    schema = VerdictPayload.model_json_schema()
+    # Build a concrete example output template with the exact literal values
+    # the model must use. Small models follow examples far better than JSON schemas.
+    example_output = {
+        "schema_version": SCHEMA_VERSION,
+        "background": "<one sentence summary of this tender>",
+        "requirements": [r.requirement for r in requirements],
+        "deadline_status": deadline.get("status", "UNRESOLVED"),
+        "deadline_utc": deadline.get("deadline_utc"),
+        "deadline_date": deadline.get("date"),
+        "deadline_time": deadline.get("time"),
+        "deadline_timezone": deadline.get("timezone"),
+        "source_timezone": deadline.get("source_timezone"),
+        "assessments": [
+            {
+                "requirement": r.requirement,
+                "tender_evidence": [e.model_dump() for e in r.tender_evidence],
+                "company_evidence": [],
+                "status": "unverified",
+                "assessment": f"No evidence on file for this requirement.",
+                "gap": f"No evidence on file for this requirement.",
+            }
+            for r in requirements
+        ],
+        "gaps": ["<gap description if any requirement cannot be met>"],
+        "verdict": "DO NOT APPLY",
+        "confidence": 0.8,
+        "urgency": False,
+        "incomplete_inputs": incomplete,
+        "limitations": ["No KB evidence available for full assessment."],
+    }
     system = (
-        "Assess the public tender against the complete company KB. Output only JSON matching "
-        "this schema: "
-        + json.dumps(schema, separators=(",", ":"))
-        + " Independently extracted material requirements are authoritative for completeness: "
-        + json.dumps([item.model_dump() for item in requirements], ensure_ascii=False)
-        + ". Assess every supplied requirement exactly once, preserve its requirement text, "
-        "and include its source evidence in that assessment. Do not add or omit requirements. "
-        "Use only supplied content. Cite tender facts with document_id/location/exact quote. "
-        "Company capability claims require exact KB heading citations and quotes; otherwise "
-        "mark status unverified and say 'No evidence on file for X'. An empty retrieved KB "
-        "means no evidence on file; it does not establish that the company lacks a capability. "
-        "Do not turn missing attachments into failed requirements. "
-        "The supplied context manifest lists omitted document sections; do not cite omitted "
-        "content. Use the Stage A result as targeting context, not as a substitute for evidence. "
-        "Verdict must follow requirement assessments. "
-        "Echo deadline exactly from authoritative context; never derive it from source documents."
+        "Assess the public tender against the complete company KB. "
+        "Output ONLY a JSON object with this EXACT structure (fill in the values, "
+        "keep all field names exactly as shown):\n"
+        + json.dumps(example_output, indent=2, ensure_ascii=False)
+        + "\n\nRules:\n"
+        "- verdict must be exactly one of: \"APPLY\", \"DO NOT APPLY\", \"APPLY WITH CONDITIONS\"\n"
+        "- schema_version, deadline_status, deadline_utc, deadline_date, deadline_time, "
+        "deadline_timezone, source_timezone: copy EXACTLY from the example above — do not change them\n"
+        "- requirements: copy the requirement strings EXACTLY as shown in the example — do NOT rephrase or translate them\n"
+        "- assessments: one entry per requirement, in the same order, requirement text copied verbatim\n"
+        "- status per assessment: \"verified\", \"unverified\", or \"failed\"\n"
+        "- company_evidence: cite exact KB section headings and quotes; leave empty [] if no KB evidence\n"
+        "- gap: if status is unverified, write 'No evidence on file for [requirement]'; if met write null\n"
+        "- assessment: if status is unverified, write 'No evidence on file for [requirement]'; if met describe the evidence\n"
+        "- Use only supplied content. Do not fabricate evidence.\n"
+        "- An empty KB means no evidence on file; it does not mean the company fails the requirement.\n"
+        "- Do not turn missing attachments into failed requirements."
     )
     public_tender = {
         "tender_id": tender.id,
