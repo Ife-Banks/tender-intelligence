@@ -660,7 +660,9 @@ class VerdictEngine:
         if error:
             return self._failure(tender, error, incomplete_inputs=incomplete)
         try:
-            payload = VerdictPayload.model_validate_json(result.content)
+            # Strip markdown fences if present (e.g., ```json ... ```)
+            content = _strip_markdown_fences(result.content)
+            payload = VerdictPayload.model_validate_json(content)
             _validate_semantics(
                 payload,
                 docs,
@@ -690,7 +692,9 @@ class VerdictEngine:
                 return self._failure(tender, retry_error, incomplete_inputs=incomplete)
             profile, result = retry_profile, retry_response
             try:
-                payload = VerdictPayload.model_validate_json(result.content)
+                # Strip markdown fences if present (e.g., ```json ... ```)
+                content = _strip_markdown_fences(result.content)
+                payload = VerdictPayload.model_validate_json(content)
                 _validate_semantics(
                     payload,
                     docs,
@@ -1544,6 +1548,22 @@ def _truncate_overlong_quotes(
         evidence=truncated_evidence
     )
 
+
+
+def _strip_markdown_fences(content: str) -> str:
+    """Remove markdown code fences (```json ... ```) from LLM output if present."""
+    content = content.strip()
+    if content.startswith("```"):
+        # Find the end of the first line (the opening fence + optional language)
+        first_newline = content.find("\n")
+        if first_newline != -1:
+            content = content[first_newline + 1:]  # Skip opening fence line
+    
+    if content.endswith("```"):
+        # Remove closing fence
+        content = content[:-3].rstrip()
+    
+    return content
 
 
 def _safe_json_shape(value: Any, depth: int = 2) -> dict[str, Any] | None:

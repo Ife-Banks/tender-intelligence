@@ -65,7 +65,10 @@ factory is currently part of application composition. Until that upstream servic
 provided, the endpoint responds with a safe unavailable error rather than inventing a
 provider implementation. No KB is sent during the connection test. Custom LLM
 `extra_headers` cannot currently be configured through this API because the existing model
-stores them in plaintext and there is no encrypted header-secret field.
+stores them in plaintext and there is no encrypted header-secret field. The built-in
+`azure_openai` protocol is the exception for Azure API-key authentication: it sends the
+encrypted profile API key as the `api-key` header and does not persist that key in
+`extra_headers`.
 
 ## Secrets and file uploads
 

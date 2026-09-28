@@ -23,6 +23,7 @@ from tender_intelligence.interfaces.llm import (
 from tender_intelligence.interfaces.protocol import LLMProtocolAdapter, register_protocol
 
 
+@register_protocol("azure_openai")
 @register_protocol("openai_compatible")
 class OpenAICompatibleAdapter(LLMProtocolAdapter):
     """Protocol adapter for OpenAI-compatible chat-completions APIs.
@@ -91,10 +92,13 @@ class OpenAICompatibleAdapter(LLMProtocolAdapter):
 
     def get_headers(self) -> dict[str, str]:
         """Return the headers for the OpenAI-compatible API."""
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
+        if (self._profile.protocol or "openai_compatible").lower() == "azure_openai":
+            headers = {"api-key": self._api_key, "Content-Type": "application/json"}
+        else:
+            headers = {
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            }
         for key, value in (self._profile.extra_headers or {}).items():
             if key.lower() not in {"authorization", "proxy-authorization", "cookie"}:
                 headers[key] = str(value)

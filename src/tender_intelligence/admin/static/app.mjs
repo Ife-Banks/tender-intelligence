@@ -932,9 +932,9 @@ function llmProfileFields(source = null) {
   return [
     { name: "name", label: "Profile name", required: true },
     { name: "provider_name", label: "Provider name (display only)", help: "Optional display name for the provider (e.g., OpenAI, Groq, Anthropic). This is metadata only and does not affect behavior." },
-    { name: "protocol", label: "Protocol / API type", type: "select", choices: [{ value: "openai_compatible", label: "OpenAI Compatible" }, { value: "anthropic", label: "Anthropic" }], required: true, help: "Determines how requests are constructed. Provider name is metadata only." },
-    { name: "base_url", label: "Provider base URL", required: true, help: "Use the base URL expected by the configured LLM adapter." },
-    { name: "model", label: "Model identifier", required: true },
+    { name: "protocol", label: "Protocol / API type", type: "select", choices: [{ value: "openai_compatible", label: "OpenAI Compatible (Bearer key)" }, { value: "azure_openai", label: "Azure OpenAI (API key header)" }, { value: "anthropic", label: "Anthropic" }], required: true, help: "Azure OpenAI sends the saved key using Azure's api-key header. Other OpenAI-compatible providers use Bearer authentication." },
+    { name: "base_url", label: "Provider base URL", required: true, help: "Azure OpenAI v1: https://<resource-name>.openai.azure.com/openai/v1" },
+    { name: "model", label: "Model / deployment identifier", required: true, help: "For Azure OpenAI, enter the deployment name you created in Azure, even if it deploys a GPT-4 model." },
     { name: "api_key", label: source?.api_key_configured ? "Replace API key" : "API key", type: "password", help: "Write-only. Leave blank to retain the configured key." },
     { name: "context_window_tokens", label: "Context window (tokens)", type: "number", min: 1, step: 1, required: true },
     { name: "max_output_tokens", label: "Maximum output tokens", type: "number", min: 1, step: 1 },

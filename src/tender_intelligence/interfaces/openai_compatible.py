@@ -81,7 +81,10 @@ class OpenAICompatibleClient(LLMClient):
         # parameter (e.g. "low", "medium", "high") to control reasoning depth.
         if self._profile.supports_reasoning_effort and self._profile.reasoning_effort:
             body["reasoning_effort"] = self._profile.reasoning_effort
-        headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
+        if (self._profile.protocol or "openai_compatible").lower() == "azure_openai":
+            headers = {"api-key": self._api_key, "Content-Type": "application/json"}
+        else:
+            headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
         for key, value in (self._profile.extra_headers or {}).items():
             if key.lower() not in {"authorization", "proxy-authorization", "cookie"}:
                 headers[key] = str(value)
