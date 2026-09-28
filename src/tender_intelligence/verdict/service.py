@@ -70,13 +70,13 @@ class VerdictDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     document_id: int
     location: StrictStr
-    quote: StrictStr
+    quote: StrictStr = Field(min_length=1, max_length=1000)
 
 
 class KBCitation(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     section: StrictStr
-    quote: StrictStr
+    quote: StrictStr = Field(min_length=1, max_length=1000)
 
 
 class MaterialRequirement(BaseModel):
