@@ -684,8 +684,8 @@ class VerdictEngine:
         try:
             # Strip markdown fences if present (e.g., ```json ... ```)
             content = _strip_markdown_fences(result.content)
-            payload = VerdictPayload.model_validate_json(content)
-            payload = _apply_authoritative_overrides(payload, material_requirements, deadline)
+            payload = VerdictPayload.model_validate(_normalize_verdict_json(content))
+            payload = _apply_authoritative_overrides(payload, material_requirements, deadline, kb)
             _validate_semantics(
                 payload,
                 docs,
@@ -696,15 +696,39 @@ class VerdictEngine:
                 self.clock(),
                 material_requirements,
             )
-        except (ValidationError, ValueError, TypeError):
+        except (ValidationError, ValueError, TypeError) as first_error:
+            # Capture detailed validation error for better retry guidance
+            error_details = ""
+            if isinstance(first_error, ValidationError):
+                errors = first_error.errors()
+                error_lines = []
+                for err in errors[:5]:  # Limit to first 5 errors
+                    loc = ".".join(str(x) for x in err.get("loc", []))
+                    msg = err.get("msg", "validation failed")
+                    error_lines.append(f"  - {loc}: {msg}")
+                error_details = "\n".join(error_lines)
+            else:
+                error_details = f"  - {str(first_error)}"
+            
             # Exactly one validation retry. The response itself is deliberately not logged.
             retry_messages = messages + [
                 LLMMessage(role="assistant", content=result.content),
                 LLMMessage(
                     role="user",
                     content=(
-                        "Correct the output to satisfy the supplied JSON schema and evidence "
-                        "rules. Return JSON only."
+                        "The output has validation errors:\n"
+                        f"{error_details}\n\n"
+                        "CRITICAL CORRECTIONS REQUIRED:\n"
+                        "1. status field: MUST be exactly \"met\", \"not_met\", \"partially_met\", or \"unverified\"\n"
+                        "   - NEVER use \"verified\", \"failed\", \"partial\"\n"
+                        "2. company_evidence: MUST use {\"section\": \"...\", \"quote\": \"...\"}\n"
+                        "   - Use \"section\" (NOT \"location\")\n"
+                        "   - section must be an exact KB heading that exists in the provided evidence\n"
+                        "   - Use [] if no KB evidence\n"
+                        "3. If status=\"unverified\", company_evidence MUST be []\n"
+                        "4. If status=\"met\", company_evidence MUST NOT be empty\n"
+                        "\n"
+                        "Return the corrected JSON with these exact fixes."
                     ),
                 ),
             ]
@@ -717,8 +741,8 @@ class VerdictEngine:
             try:
                 # Strip markdown fences if present (e.g., ```json ... ```)
                 content = _strip_markdown_fences(result.content)
-                payload = VerdictPayload.model_validate_json(content)
-                payload = _apply_authoritative_overrides(payload, material_requirements, deadline)
+                payload = VerdictPayload.model_validate(_normalize_verdict_json(content))
+                payload = _apply_authoritative_overrides(payload, material_requirements, deadline, kb)
                 _validate_semantics(
                     payload,
                     docs,
@@ -1967,32 +1991,123 @@ def _validate_requirement_sources(extraction: RequirementExtraction, source_docs
                 raise ValueError(error_details)
 
 
-def _apply_authoritative_overrides(payload, material_requirements, deadline):
+def _normalize_verdict_json(content: str) -> dict[str, Any]:
+    """Normalize known model formatting mistakes before strict schema validation."""
+    data = json.loads(content)
+    assessments = data.get("assessments") if isinstance(data, dict) else None
+    if isinstance(assessments, list):
+        status_map = {
+            "verified": "met",
+            "partial": "partially_met",
+            "partially_verified": "partially_met",
+            "failed": "not_met",
+        }
+        for assessment in assessments:
+            if not isinstance(assessment, dict):
+                continue
+            if isinstance(assessment.get("status"), str):
+                assessment["status"] = status_map.get(
+                    assessment["status"], assessment["status"]
+                )
+            citations = assessment.get("company_evidence")
+            if isinstance(citations, list):
+                for citation in citations:
+                    if (
+                        isinstance(citation, dict)
+                        and "location" in citation
+                        and "section" not in citation
+                    ):
+                        citation["section"] = citation.pop("location")
+    return data
+
+
+def _apply_authoritative_overrides(payload, material_requirements, deadline, kb_text=""):
     """Inject authoritative values that must not deviate from independently extracted data.
 
-    Small models paraphrase requirements, forget deadline fields, and leave placeholder
-    text in gaps. This function corrects all of these after parsing, before validation.
+    Small models paraphrase requirements, forget deadline fields, leave placeholder
+    text in gaps, use wrong status values, and cite KB with wrong field names. This
+    function corrects all of these after parsing, before validation.
     """
     req_strings = [r.requirement for r in material_requirements]
+    
+    # Get valid KB headings for citation validation
+    kb_headings = {
+        line.lstrip("# ").strip() 
+        for line in kb_text.splitlines() 
+        if line.startswith("#")
+    }
 
-    # Fix assessments: align requirement strings and strip unfilled placeholders
+    # Fix assessments: align requirement strings, normalize status, fix company_evidence keys,
+    # and validate KB citations
     fixed_assessments = []
     for i, assessment in enumerate(payload.assessments):
         # Map to authoritative requirement string by position (model keeps order)
         authoritative_req = req_strings[i] if i < len(req_strings) else assessment.requirement
+        
+        # Normalize status values
+        status = assessment.status
+        status_map = {
+            "verified": "met",
+            "partial": "partially_met",
+            "partially_verified": "partially_met",
+            "failed": "not_met",
+        }
+        status = status_map.get(status, status)
+        
+        # Fix company_evidence: rename 'location' to 'section' if present
+        fixed_company_evidence = []
+        for citation in assessment.company_evidence:
+            citation_dict = citation.model_dump() if hasattr(citation, "model_dump") else citation
+            
+            # Rename location→section
+            if "location" in citation_dict and "section" not in citation_dict:
+                citation_dict["section"] = citation_dict.pop("location")
+            
+            # Drop citation if section isn't a real KB heading
+            section = citation_dict.get("section", "")
+            if section not in kb_headings:
+                # Invalid KB reference - drop this citation
+                continue
+            
+            fixed_company_evidence.append(KBCitation(**citation_dict))
+        
+        # If we dropped all company evidence and status was met, set to unverified
+        if not fixed_company_evidence and status == "met":
+            status = "unverified"
+        
         # Fix gap placeholder
         gap = assessment.gap
         if gap and ("<" in gap and ">" in gap):
             gap = f"No evidence on file for this requirement."
+        elif not fixed_company_evidence and status == "unverified":
+            gap = f"No evidence on file for this requirement."
+        
+        # Fix assessment text
+        assessment_text = assessment.assessment
+        if not fixed_company_evidence and status == "unverified":
+            assessment_text = f"No evidence on file for this requirement."
+        
         fixed_assessments.append(assessment.model_copy(update={
             "requirement": authoritative_req,
+            "status": status,
+            "company_evidence": fixed_company_evidence,
             "gap": gap,
+            "assessment": assessment_text,
         }))
 
     # Fix gaps list placeholder
     gaps = payload.gaps
     if gaps and all("<" in g and ">" in g for g in gaps):
         gaps = ["No evidence on file for all requirements."]
+    
+    # Compute verdict from assessments (it's fully derivable)
+    statuses = [a.status for a in fixed_assessments]
+    if any(s == "not_met" for s in statuses):
+        derived_verdict = "DO NOT APPLY"
+    elif all(s == "met" for s in statuses):
+        derived_verdict = "APPLY"
+    else:
+        derived_verdict = "APPLY WITH CONDITIONS"
 
     return payload.model_copy(update={
         "requirements": req_strings,
@@ -2004,6 +2119,7 @@ def _apply_authoritative_overrides(payload, material_requirements, deadline):
         "source_timezone": deadline.get("source_timezone"),
         "assessments": fixed_assessments,
         "gaps": gaps,
+        "verdict": derived_verdict,
     })
 
 
@@ -2027,38 +2143,79 @@ def _verdict_messages(
             {
                 "requirement": r.requirement,
                 "tender_evidence": [e.model_dump() for e in r.tender_evidence],
+                "company_evidence": [
+                    {
+                        "section": "# Exact KB heading from provided evidence",
+                        "quote": "Verbatim text found under that heading"
+                    }
+                ],
+                "status": "met",
+                "assessment": "Company has documented evidence in the KB.",
+                "gap": None,
+            }
+            for r in requirements[:1]  # Show one example
+        ] + [
+            {
+                "requirement": requirements[1].requirement if len(requirements) > 1 else "Example requirement",
+                "tender_evidence": [e.model_dump() for e in requirements[1].tender_evidence] if len(requirements) > 1 else [],
                 "company_evidence": [],
                 "status": "unverified",
-                "assessment": f"No evidence on file for this requirement.",
-                "gap": f"No evidence on file for this requirement.",
+                "assessment": "No evidence on file for this requirement.",
+                "gap": "No evidence on file for this requirement.",
             }
-            for r in requirements
         ],
         "gaps": ["<gap description if any requirement cannot be met>"],
-        "verdict": "DO NOT APPLY",
+        "verdict": "APPLY WITH CONDITIONS",
         "confidence": 0.8,
         "urgency": False,
         "incomplete_inputs": incomplete,
-        "limitations": ["No KB evidence available for full assessment."],
+        "limitations": ["No KB evidence available for some requirements."],
     }
     system = (
         "Assess the public tender against the complete company KB. "
-        "Output ONLY a JSON object with this EXACT structure (fill in the values, "
-        "keep all field names exactly as shown):\n"
+        "Output ONLY a JSON object with this EXACT structure:\n"
         + json.dumps(example_output, indent=2, ensure_ascii=False)
-        + "\n\nRules:\n"
-        "- verdict must be exactly one of: \"APPLY\", \"DO NOT APPLY\", \"APPLY WITH CONDITIONS\"\n"
-        "- schema_version, deadline_status, deadline_utc, deadline_date, deadline_time, "
-        "deadline_timezone, source_timezone: copy EXACTLY from the example above — do not change them\n"
-        "- requirements: copy the requirement strings EXACTLY as shown in the example — do NOT rephrase or translate them\n"
-        "- assessments: one entry per requirement, in the same order, requirement text copied verbatim\n"
-        "- status per assessment: \"verified\", \"unverified\", or \"failed\"\n"
-        "- company_evidence: cite exact KB section headings and quotes; leave empty [] if no KB evidence\n"
-        "- gap: if status is unverified, write 'No evidence on file for [requirement]'; if met write null\n"
-        "- assessment: if status is unverified, write 'No evidence on file for [requirement]'; if met describe the evidence\n"
-        "- Use only supplied content. Do not fabricate evidence.\n"
-        "- An empty KB means no evidence on file; it does not mean the company fails the requirement.\n"
-        "- Do not turn missing attachments into failed requirements."
+        + "\n\nCRITICAL SCHEMA RULES:\n"
+        "1. verdict: EXACTLY one of \"APPLY\" | \"DO NOT APPLY\" | \"APPLY WITH CONDITIONS\"\n"
+        "2. status per assessment: EXACTLY one of \"met\" | \"not_met\" | \"partially_met\" | \"unverified\"\n"
+        "   - NEVER use \"verified\", \"failed\", \"partial\", or other values\n"
+        "3. company_evidence items: {\"section\": \"<exact KB heading>\", \"quote\": \"<verbatim text>\"}\n"
+        "   - Use ONLY \"section\" and \"quote\" keys (NOT \"location\")\n"
+        "   - section MUST be an exact heading from the KB (starts with #)\n"
+        "   - Use empty list [] if no KB evidence exists\n"
+        "4. schema_version, deadline_status, deadline_utc, deadline_date, deadline_time, "
+        "deadline_timezone, source_timezone: copy EXACTLY from the example — do NOT change\n"
+        "5. requirements: copy requirement strings EXACTLY as shown in the example — do NOT rephrase\n"
+        "6. assessments: one entry per requirement, in same order, requirement text verbatim\n"
+        "7. If status is \"unverified\", write: gap=\"No evidence on file for this requirement.\" "
+        "and assessment=\"No evidence on file for this requirement.\"\n"
+        "8. If status is \"met\", gap must be null and company_evidence must not be empty\n"
+        "\n"
+        "EVIDENCE RULES:\n"
+        "- Cite only KB section headings and quotes that actually exist in the provided KB\n"
+        "- An empty KB means no evidence on file; it does NOT mean the company fails\n"
+        "- Missing attachments do NOT become failed requirements\n"
+        "- Use only supplied content — do NOT fabricate evidence\n"
+        "\n"
+        "EXAMPLE OF ONE VALID ASSESSMENT:\n"
+        "{\n"
+        "  \"requirement\": \"Minimum 3 years experience in project management\",\n"
+        "  \"tender_evidence\": [{\"document_id\": 1, \"location\": \"section:5\", \"quote\": \"...\"}],\n"
+        "  \"company_evidence\": [{\"section\": \"Project History\", \"quote\": \"Delivered 15 projects since 2020\"}],\n"
+        "  \"status\": \"met\",\n"
+        "  \"assessment\": \"Company has 5+ years documented project delivery.\",\n"
+        "  \"gap\": null\n"
+        "}\n"
+        "\n"
+        "EXAMPLE OF UNVERIFIED ASSESSMENT (no KB evidence):\n"
+        "{\n"
+        "  \"requirement\": \"ISO 27001 certification required\",\n"
+        "  \"tender_evidence\": [{\"document_id\": 2, \"location\": \"section:8\", \"quote\": \"...\"}],\n"
+        "  \"company_evidence\": [],\n"
+        "  \"status\": \"unverified\",\n"
+        "  \"assessment\": \"No evidence on file for this requirement.\",\n"
+        "  \"gap\": \"No evidence on file for this requirement.\"\n"
+        "}"
     )
     public_tender = {
         "tender_id": tender.id,
