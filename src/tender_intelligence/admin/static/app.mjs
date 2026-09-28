@@ -765,7 +765,11 @@ async function openTender(tenderId) {
   state.activeTenderId = tenderId;
   content.replaceChildren(loadingPanel("Loading persisted tender and timeline…"));
   try {
+    console.log(`[Admin UI] Opening tender ${tenderId}`);
     const [tender, timeline] = await Promise.all([api.get(`/tenders/${tenderId}`), api.get(`/tenders/${tenderId}/timeline`)]);
+    console.log(`[Admin UI] Tender data:`, tender);
+    console.log(`[Admin UI] Timeline data:`, timeline);
+    console.log(`[Admin UI] Tender verdict_status: ${tender.verdict_status}, verdict_error_code: ${tender.verdict_error_code}`);
     if (state.activeTenderId !== tenderId) return;
     const details = node("div", { class: "detail-grid" });
     for (const [label, value] of Object.entries({
@@ -784,7 +788,18 @@ async function openTender(tenderId) {
       "Verdict": tender.verdict?.recommendation || "Not available",
     })) details.append(node("div", { class: "detail-item" }, [node("span", { text: label }), node("strong", { text: value ?? "Unavailable" })]));
     const events = node("div", { class: "timeline" });
+    console.log(`[Admin UI] Processing ${timeline.events?.length || 0} timeline events`);
     for (const event of timeline.events || []) {
+      console.log(`[Admin UI] Timeline event:`, {
+        stage: event.stage,
+        status: event.status,
+        timestamp: event.timestamp,
+        tender_id: event.tender_id,
+        run_id: event.run_id,
+        correlation_id: event.correlation_id,
+        failure_code: event.failure_code,
+        processing_info: event.processing_info
+      });
       events.append(node("article", { class: "timeline-event" }, [
         node("div", { class: "timeline-line", "aria-hidden": "true" }, node("span", { class: "timeline-node" })),
         node("div", { class: "timeline-body" }, [node("strong", { text: `${event.stage} · ${event.status}` }), node("div", { class: "timeline-meta", text: `${formatDate(event.timestamp)} · tender ${event.tender_id ?? "—"} · run ${event.run_id ?? "—"} · correlation ${event.correlation_id || "—"}` }), event.failure_code && node("div", { class: "timeline-meta", text: `Failure: ${event.failure_code}` })]),
@@ -796,14 +811,21 @@ async function openTender(tenderId) {
     {
       const verdictBox = card("Verdict history", [loadingPanel("Loading verdict details…")]);
       detail.append(verdictBox);
+      console.log(`[Admin UI] Fetching verdicts for tender ${tenderId}`);
       api.get(`/tenders/${tenderId}/verdicts`).then((data) => {
+        console.log(`[Admin UI] Verdicts response:`, data);
+        console.log(`[Admin UI] Found ${data.items?.length || 0} verdict records`);
         if (state.activeTenderId !== tenderId) return;
         const rows = (data.items || []).map((v) => [v.id, v.recommendation, v.confidence ?? "Unavailable", v.urgency ? "Urgent" : "Not urgent", v.incomplete_inputs ? "Incomplete inputs" : "Complete inputs", formatDate(v.generated_at)]);
         verdictBox.lastChild.replaceWith(makeTable(["Verdict ID", "Recommendation", "Confidence", "Urgency", "Inputs", "Generated"], rows));
-      }).catch((error) => verdictBox.lastChild.replaceWith(errorPanel(error)));
+      }).catch((error) => {
+        console.error(`[Admin UI] Verdict fetch error:`, error);
+        verdictBox.lastChild.replaceWith(errorPanel(error));
+      });
     }
     content.replaceChildren(detail);
   } catch (error) {
+    console.error(`[Admin UI] Error loading tender ${tenderId}:`, error);
     if (state.activeTenderId === tenderId) content.replaceChildren(errorPanel(error, () => openTender(tenderId)));
   }
 }

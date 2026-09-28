@@ -115,6 +115,9 @@ const REQUEST_TIMEOUT_MS = 30_000;
 // Provider calls use the saved profile's timeout (up to 600 seconds), plus a small
 // response/serialization margin. A 30-second browser abort would hide the provider result.
 const PROVIDER_TEST_TIMEOUT_MS = 610_000;
+// Source dry runs crawl multiple pages sequentially and may retry slow upstream requests.
+// Keep the browser connected long enough to receive the actual dry-run report.
+const SOURCE_TEST_TIMEOUT_MS = 610_000;
 
 async function _request(method, path, body, signal) {
   const url = `${API_BASE}${path}`;
@@ -181,7 +184,9 @@ export class LiveAdminApi {
   async _call(method, path, body) {
     const timeout = /^\/llm\/profiles\/\d+\/test$/.test(path)
       ? PROVIDER_TEST_TIMEOUT_MS
-      : REQUEST_TIMEOUT_MS;
+      : /^\/sources\/\d+\/test$/.test(path)
+        ? SOURCE_TEST_TIMEOUT_MS
+        : REQUEST_TIMEOUT_MS;
     return _withTimeout((signal) => _request(method, path, body, signal), timeout);
   }
 
