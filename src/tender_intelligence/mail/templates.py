@@ -69,11 +69,18 @@ def base_subject(content: NotificationContent) -> str:
     """Return the subject without Test Mode/urgency markers."""
 
     source = content.source_name.strip() or "SOURCE"
+    # Truncate title to keep subject under ~100 characters total
+    # Format: "SOURCE Expression of Interest – Assessment Report: TITLE"
+    # Allow ~60 chars for title to keep total reasonable
+    title = content.title.strip()
+    if len(title) > 60:
+        title = title[:57] + "..."
+    
     if content.kind == NotificationKind.UPDATE:
         changed = content.update_summary.strip()
         tail = f": {changed}" if changed else ""
-        return f"{source} UPDATE – {content.title}{tail}"
-    return f"{source} Expression of Interest – Assessment Report: {content.title}"
+        return f"{source} UPDATE – {title}{tail}"
+    return f"{source} Expression of Interest – Assessment Report: {title}"
 
 
 def subject(content: NotificationContent) -> str:
