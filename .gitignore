@@ -36,3 +36,6 @@ objects/
 
 # Package manager caches
 .uv-cache/
+
+# Freebuff tooling
+.freebuff/

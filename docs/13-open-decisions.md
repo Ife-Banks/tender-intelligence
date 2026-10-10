@@ -374,13 +374,133 @@ Impact if unresolved: normal deduplication still works in the system of record a
 request boundary, but end-to-end delivery-side header visibility is not independently verifiable.
 ```
 
+## O25. Recovery edge for tenders persisted but never verdicted
+
+```
+Decision: What re-enters the pipeline when a tender was persisted by dedup but its run never
+reached a verdict (interrupted process, crash, or an aborted stage)?
+Why it matters: dedup classifies a previously-seen, materially-unchanged listing as UNCHANGED, and
+prompt 10 §13 deliberately excludes UNCHANGED from the work set. That is correct for a tender that
+was already processed — but it also permanently swallows a tender whose run died *after*
+persistence and *before* the verdict: its row exists, so every later crawl calls it unchanged, so
+it is never triaged, verdicted or notified again, and nothing in the pipeline ever re-enters it.
+Observed in production on 2026-10-03: 158 tenders stranded at `status='new'`, none of them ever
+emailed. This is the "silently broken watcher creates false confidence" failure v1.1 §5.2 names.
+Current status: DECIDED as a documented default, flagged for confirmation (implementer). The recovery
+edge exists in `RunCoordinator._recover_unprocessed` and is **OPT-IN**:
+`unprocessed_recovery_limit` defaults to `0` (off); a positive value re-drives up to that many
+`status='new'` tenders per run, oldest first, scoped to the source being run, and never touching
+`processed` or `verdict_failed` (O21 keeps the latter terminal).
+Why opt-in rather than on-by-default: `status='new'` alone cannot distinguish an interrupted tender
+from one that legitimately completed every configured stage and simply had no verdict stage to
+advance it. With no Stage B wired, a fully processed tender stays `new` forever, so an always-on
+recovery would re-drive it on every run — the exact waste §13 exists to prevent, and it would
+break the §13 contract asserted by `test_repeated_run_reuses_state_and_records_a_separate_run` and
+`test_unchanged_run_does_not_refetch_attachment_pages`. Distinguishing the two properly needs a
+durable marker (e.g. a `last_processed_run_id` on the tender) rather than a status read.
+Known options: (a) as implemented — opt-in recovery with a per-run cap; (b) add a durable
+"entered the work set" marker and make recovery always-on; (c) operator-only bulk re-drive action in
+the admin UI, with no automatic edge; (d) leave as-is (tenders stranded silently).
+Information required: Whether OPEX wants automatic self-healing of an interrupted backlog, or
+prefers to control re-drives explicitly. Also whether Stage B is guaranteed wired in every
+deployment — the opt-in default is safe either way, but (b) is only correct when it is.
+Who should decide: OPEX (business) with the build/maintain team.
+Impact if unresolved: with the default (off), an interrupted backlog stays stranded and no email is
+ever sent for those tenders — the reported failure. Setting a positive limit on a deployment with
+Stage B wired heals it automatically, bounded per run.
+```
+
+## O26. Raw-notice routing when the assessment is unavailable
+
+```
+Decision: When Stage B cannot produce a verdict, who receives the "raw notice" that v1.1 §5.6
+requires ("the raw notice is still emailed ... so nothing is lost")?
+Why it matters: The requirement was never implemented. `_stage_verdict` returned only *available*
+verdicts and `_stage_notifications` iterated that list, so any verdict failure produced zero
+notifications — the exact silent-loss the spec forbids, and confirmed in production on 2026-10-03
+(a tender with an unreachable detail page produced no mail and no trace beyond a run row). A raw
+notice has no recommendation, so `RecipientRouter._receives()` cannot evaluate recipients filtered
+to `apply`/`urgent`; applying it anyway would drop the notice for most configured recipients,
+re-creating the same silence.
+Current status: DECIDED by the business owner on 2026-10-03 — **dev alert list only**. Implemented
+as `NotificationKind.RAW_NOTICE` with `verdict_id` optional, a verdict-less template carrying the
+required "AUTOMATIC ASSESSMENT UNAVAILABLE" banner and the machine-readable reason, a stable
+dedupe sentinel, and `RecipientRouter.resolve_raw_notice()` which resolves the dev list
+unconditionally. `_assert_raw_notice_recipients` fails the send closed if a raw notice ever
+resolves to a non-dev recipient, on both the prepare and the send-boundary revalidation.
+Why not the business list: a raw notice carries no assessment. Mailing business recipients a
+notice with no verdict would look like a deliverable the system never produced. OPEX learns about
+the failure through the dev-alert path and the run timeline.
+Known options: (a) as implemented — dev list only; (b) route as `all`, bypassing
+`receives_filter`, so business recipients are told a tender exists but could not be assessed;
+(c) dev list plus a separate business-facing "unassessable" notice.
+Information required: Whether OPEX wants business recipients told directly when the system cannot
+assess a tender they might have bid on. That is option (b), and it is the one to revisit first if
+a missed deadline is traced to a verdict failure.
+Who should decide: OPEX (business) with the build/maintain team.
+Impact if unresolved: default (a) is in force. Business recipients are not told about
+unassessable tenders; only the dev list and the run timeline are.
+```
+
+## O27. Assessing from the published notice when no tender document is downloadable
+
+```
+Decision: When a source publishes a tender notice with no downloadable tender document, should the
+tender be assessed from the notice text, or reported as unassessable?
+Why it matters: Two of the configured aggregators (TenderDetail Global and TenderDetail Nigeria) and
+All Business Africa publish a real description on the detail page while keeping the tender document
+behind a login or subscription. Confirmed against a live TenderDetail notice on 2026-10-04: the page
+exposes zero document-extension links. Stage B's rule "no requirement sources -> fail" was therefore
+doing exactly what it says, but the outcome was wrong in substance: those tenders were logged
+`requirement_sources_unavailable` and went out as raw dev-alert notices. The system said nothing
+about a tender it had a title, a procuring entity, a scope and requirement bullets for. That is the
+"silently broken watcher creates false confidence" failure v1.1 A5.2 names, in a new place.
+Current status: DECIDED by the build/maintain team on 2026-10-04, business sign-off still outstanding
+— **assess from the notice, and say so**. Implemented as `processing/notice.py`: the parsed detail
+page becomes a synthetic, citable document (`tender-notice.txt`, `extraction_method='notice_text'`,
+`document_metadata.source_kind='notice_text'`) added to the bundle *only* when no downloaded document
+yielded citable content. Stage B marks each document's `notice_only` flag, adds a dedicated prompt
+branch to both the requirement-extraction and verdict calls, forces `incomplete_inputs=True`,
+subtracts `NOTICE_ONLY_CONFIDENCE_PENALTY` (0.25) in code rather than asking the model for it, and
+injects a fixed "No Downloadable source files" limitation ahead of anything the model wrote. The
+notification renders the same caveat as a banner above Section 1 and as a notes-footer line; the
+admin console publishes `notice_only` on both the tenders list and the tender detail, and shows
+"No downloadable source files" in place of the generic "Incomplete inputs" pill.
+Why the penalty is applied in code: a penalty the model is asked to apply is a penalty it can decline
+to apply. `_apply_authoritative_overrides` already exists to correct model-reported values against
+authoritative inputs, and "the record this rests on is partial" is exactly such an input.
+Why the notice never displaces a real document: adding a summary next to the primary source invites a
+model to cite the weaker one. The fallback fires only when nothing was downloaded, or when every
+downloaded file failed to extract.
+Why `requirement_sources_unavailable` still exists: a tender with no notice and no readable document
+genuinely has no assessable material. Firing that error only when there is *no* source material at all
+is what makes the fallback meaningful rather than a blanket suppression.
+Known options: (a) as implemented — notice-only assessment with a fixed penalty and a visible caveat;
+(b) no fallback, keep raw notices for every gated portal, and accept that the business sees nothing;
+(c) notice-only assessment with no confidence penalty, relying on the written caveat alone (rejected:
+a reader who reads the verdict without its limitations sees an unqualified number); (d) fall back only
+for whitelisted sources rather than for any source that happens to publish a notice.
+Information required: Whether OPEX accepts a verdict reached without the tender document, given that
+eligibility, qualification and scoring criteria normally live in the annexes that are missing. If not,
+option (b) applies and the gated portals should be switched off instead of degraded — that is a
+business call about bidding on incomplete information, not a technical one. Also whether 0.25 is the
+right size.
+Who should decide: OPEX (business) — this is a bidding-information risk decision, not an engineering one.
+Related: O8 (TenderDetail as a source), O14 (per-source terms of service), O26 (raw-notice routing).
+Automated login to fetch the gated documents is deliberately NOT implemented and remains blocked on the
+O14 ToS review: it is brittle (session expiry, CSRF, CAPTCHAs) and stores third-party credentials.
+Impact if unresolved: the fallback ships and paywalled tenders are assessed on the public record with
+a visible caveat. If OPEX rejects it, revert to option (b) by not passing `notice=` from the
+coordinator and switch the gated sources off — a one-line change, no migration.
+```
+
 ---
 
 ## Decision summary tables
 
 | Who | Decisions |
 |---|---|
-| OPEX (business) | O1, O5, O6, O7, O8, O9, O12, O16, O20, O21, O22, O23 |
+| OPEX (business) | O1, O5, O6, O7, O8, O9, O12, O16, O20, O21, O22, O23, O27 |
 | OPEX (business + IT) | O3, O10 |
 | Build/maintain team (+ OPEX where relevant) | O2, O4, O13, O14, O18, O24 |
 | OPEX (IT) + build team | O17 |
@@ -394,7 +514,7 @@ request boundary, but end-to-end delivery-side header visibility is not independ
 | Phase 1 (Test Mode) | O3 (authorised sender mailbox) |
 | Phase 2 | O18 (vision/OCR default), O9 (budget value) perhaps O4 (2nd mail provider, Test Mode) |
 | Phase 3 | O8 (TenderDetail), O14 (ToS per source), O13 (providers 2/3 if chain required) |
-| Phase 4 (go-live) | O1, O3, O4, O9, O12, O16, O20, O22 (partial-input wording), O5/O6/O7 (triage profile) |
+| Phase 4 (go-live) | O1, O3, O4, O9, O12, O16, O20, O22 (partial-input wording), O5/O6/O7 (triage profile), O27 (accept notice-only verdicts) |
 
 ## Open-decision discipline
 

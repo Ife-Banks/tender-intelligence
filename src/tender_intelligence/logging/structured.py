@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from typing import Any
 
@@ -26,6 +27,26 @@ SENSITIVE_KEYS = frozenset(
     }
 )
 REDACTED = "[REDACTED]"
+
+#: ``key=value`` / ``key: value`` inside free text. Key-based scrubbing cannot see these: a
+#: message like "connect failed (password=hunter2)" has no dict key to match, and exception
+#: text and tracebacks are exactly the place such strings turn up (connection URLs, request
+#: reprs). Logging a traceback therefore has to scrub content as well as structure, or
+#: PROJECT_RULES #12 ("no secrets in logs") would be satisfied only until the first failure.
+_TEXT_SECRET = re.compile(
+    r"(?i)\b(" + "|".join(sorted(SENSITIVE_KEYS)) + r")\b(\s*[=:]\s*)"
+    r"""("[^"]*"|'[^']*'|[^\s,;)\]}]+)"""
+)
+
+
+def _scrub_text(text: str) -> str:
+    """Redact secret-looking ``key=value`` pairs embedded in a message or traceback."""
+
+    def replace(match: re.Match[str]) -> str:
+        key, separator = match.group(1), match.group(2)
+        return f"{key}{separator}{REDACTED}"
+
+    return _TEXT_SECRET.sub(replace, text)
 
 
 def _scrub_value(value: Any, key: str | None = None) -> Any:
@@ -68,6 +89,16 @@ class JsonFormatter(logging.Formatter):
         extra = getattr(record, "extra", None)
         if extra:
             base["extra"] = _scrub_value(extra)
+        if record.exc_info:
+            # A failure whose cause is unlogged cannot be acted on, which is exactly the "fail
+            # loudly" promise v1.1 §2.9 makes. This formatter previously dropped `exc_info`
+            # entirely, so every `logger.exception(...)` in the codebase — the scheduler poll,
+            # the run coordinator, acquisition, notification — announced that something broke
+            # and then discarded why.
+            exc_type, exc_value, _ = record.exc_info
+            base["error_type"] = getattr(exc_type, "__name__", str(exc_type))
+            base["error_message"] = _scrub_text(str(exc_value))
+            base["traceback"] = _scrub_text(self.formatException(record.exc_info))
         try:
             return json.dumps(base, separators=(",", ":"), default=str)
         except (TypeError, ValueError):  # pragma: no cover - defensive

@@ -38,6 +38,11 @@ TENDER_TRANSITION_MATRIX: Final[dict[str, frozenset[str]]] = {
     "awaiting_budget": frozenset({"awaiting_budget", "updated", "processed", "verdict_failed", "awaiting_approved_provider"}),
     "awaiting_approved_provider": frozenset({"awaiting_approved_provider", "updated", "processed", "verdict_failed", "awaiting_budget"}),
     "verdict_failed": frozenset({"verdict_failed"}),
+    # Terminal. `expired` is a dead end like `verdict_failed` (docs/13 O21): the deadline has
+    # passed, so re-processing cannot produce a biddable outcome. Nothing may transition out of
+    # it, which also means the recovery query — which selects `new` alone — can never pick one
+    # up again.
+    "expired": frozenset({"expired"}),
 }
 
 

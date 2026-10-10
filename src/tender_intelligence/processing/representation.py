@@ -64,7 +64,9 @@ from tender_intelligence.processing.versions import (
 
 #: Extraction methods recorded per document (docs/06 §6.2 metadata: native/OCR/vision/DOCX).
 #: ``none`` means no extraction was performed (skipped or failed before extraction).
-EXTRACTION_METHODS: tuple[str, ...] = ("native_pdf", "ocr", "docx", "none")
+#: ``notice_text`` is the source's own notice text, used only when nothing was downloaded — see
+#: :mod:`tender_intelligence.processing.notice`.
+EXTRACTION_METHODS: tuple[str, ...] = ("native_pdf", "ocr", "docx", "notice_text", "none")
 
 #: Per-page extraction methods.
 PAGE_METHODS: tuple[str, ...] = ("native_pdf", "ocr")

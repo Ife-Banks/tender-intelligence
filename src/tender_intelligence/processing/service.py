@@ -71,6 +71,7 @@ from tender_intelligence.processing.errors import (
     ProcessingError,
 )
 from tender_intelligence.processing.languages import bundle_languages, detect_language
+from tender_intelligence.processing.notice import NoticeSource, notice_extraction
 from tender_intelligence.processing.ocr import OcrEngine
 from tender_intelligence.processing.pdf import (
     DEFAULT_RENDER_DPI,
@@ -566,12 +567,25 @@ class DocumentProcessingService:
         return self._config
 
     def process_tender(
-        self, tender_id: int, *, correlation_id: str | None = None
+        self,
+        tender_id: int,
+        *,
+        correlation_id: str | None = None,
+        notice: NoticeSource | None = None,
     ) -> TenderDocumentBundle:
         """Produce the reusable bundle for *tender_id* and persist it (prompt 09 §12, §13).
 
         Returns the bundle for the caller to hand to the AI stage; this method performs no
         triage or verdicting (prompt 09 §17).
+
+        *notice* is the tender's own published notice (see
+        :mod:`tender_intelligence.processing.notice`), supplied by the caller because only the
+        detail-discovery stage has the page. It is used **only** when nothing was downloaded:
+        a tender with real documents is assessed on those documents, and adding the summary
+        alongside them would invite a model to cite the weaker source in preference to the
+        primary one. When the notice does become the bundle's only content, the bundle records
+        ``incomplete_inputs`` — an assessment reached from a summary is partial by construction
+        (docs/06 §6.5).
         """
         correlation = correlation_id or get_correlation_id() or new_correlation_id()
         with correlation_context(correlation):
@@ -632,10 +646,26 @@ class DocumentProcessingService:
                     _seen_checksums[checksum] = result
             languages = bundle_languages([document.language for document in documents])
 
+            # The fallback to the tender's own notice, taken only when no downloaded document
+            # yielded citable content. See processing.notice for why a notice is usable evidence
+            # and why it must never displace a real document.
+            notice_document = None
+            if notice is not None and not any(
+                document.is_extracted and _has_content(document) for document in documents
+            ):
+                notice_document = notice_extraction(
+                    notice, tender_id=tender_id, correlation_id=correlation
+                )
+                if notice_document is not None:
+                    documents = [*documents, notice_document]
+                    languages = bundle_languages(
+                        [document.language for document in documents]
+                    )
+
             bundle = TenderDocumentBundle(
                 tender_id=tender_id,
                 documents=documents,
-                incomplete_inputs=_incomplete(documents),
+                incomplete_inputs=_incomplete(documents) or notice_document is not None,
                 languages=languages,
                 metadata=self._bundle_metadata(correlation),
                 # Recorded on every bundle, never inferred by the consumer: with no provider
@@ -657,6 +687,7 @@ class DocumentProcessingService:
                     "failed_count": len(bundle.failed_documents),
                     "skipped_count": len(bundle.skipped_documents),
                     "incomplete_inputs": bundle.incomplete_inputs,
+                    "notice_only": notice_document is not None,
                 },
             )
             return bundle
@@ -834,6 +865,16 @@ class DocumentProcessingService:
             processed_at=_utcnow_iso(),
             correlation_id=correlation,
         )
+
+
+def _has_content(document: DocumentExtraction) -> bool:
+    """Whether this extraction carries text a downstream stage could actually cite.
+
+    Mirrors the test Stage B applies when it decides it has requirement sources: an
+    ``extracted`` status with no page, section or body text is a document that was opened and
+    yielded nothing, and it must not be mistaken for usable evidence.
+    """
+    return bool(document.text or document.pages or document.sections)
 
 
 def _incomplete(documents: list[DocumentExtraction]) -> bool:

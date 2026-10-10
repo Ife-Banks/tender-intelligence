@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 from urllib.parse import urlsplit
@@ -92,7 +91,7 @@ class OpenAICompatibleClient(LLMClient):
         for key, value in (self._profile.extra_headers or {}).items():
             if key.lower() not in {"authorization", "proxy-authorization", "cookie"}:
                 headers[key] = str(value)
-        
+
         try:
             # Streaming the HTTP response locally (while requesting stream=false from
             # the provider) lets us tell a pre-response connection timeout from a
@@ -112,9 +111,6 @@ class OpenAICompatibleClient(LLMClient):
                         error_body = {}
                     if not isinstance(error_body, dict):
                         error_body = {}
-                    except Exception:
-                        print(repr(raw_error_json), file=_sys.stderr)
-                    print(f"{'='*80}\n", file=_sys.stderr)
                     raise LLMError(
                         "OpenAI-compatible provider rejected the request",
                         _status_error_code(response.status_code, error_body),
@@ -131,7 +127,7 @@ class OpenAICompatibleClient(LLMClient):
             message = choices[0].get("message", {}) if choices else {}
             finish_reason = choices[0].get("finish_reason") if choices else None
             content = message.get("content")
-            
+
             if not isinstance(content, str) or not content:
                 raise LLMError(
                     "Provider returned no completion content", "invalid_provider_response"

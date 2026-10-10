@@ -30,11 +30,14 @@ from datetime import UTC, datetime
 import pytest
 
 from tender_intelligence.verdict.service import (
+    KBCitation,
     MaterialRequirement,
     RequirementAssessment,
     RequirementExtraction,
     VerdictDocument,
     VerdictPayload,
+    _apply_authoritative_overrides,
+    _normalize_verdict_json,
     _validate_requirement_sources,
     _validate_semantics,
 )
@@ -206,6 +209,136 @@ def test_complete_requirement_set_passes_validation() -> None:
     """
     payload = _full_payload()
     _call_validate(payload)   # must not raise
+
+
+def test_gemma_json_normalization_repairs_only_known_aliases() -> None:
+    normalized = _normalize_verdict_json(
+        '{"assessments":[{"status":"verified","company_evidence":'
+        '[{"location":"Office","quote":"address"}]}]}'
+    )
+    assessment = normalized["assessments"][0]
+    assert assessment["status"] == "met"
+    assert assessment["company_evidence"] == [
+        {"section": "Office", "quote": "address"}
+    ]
+
+
+def test_authoritative_verdict_requires_all_met_and_no_gaps() -> None:
+    assessments = [
+        _assessment(req.requirement, req.tender_evidence[0].quote, status="met")
+        for req in _REQUIREMENTS
+    ]
+    payload = _full_payload(assessments=assessments, gaps=[], verdict="DO NOT APPLY")
+    repaired = _apply_authoritative_overrides(payload, _REQUIREMENTS, _DEADLINE, _KB)
+    assert repaired.verdict == "APPLY"
+
+
+def test_kb_citation_survives_the_heading_markdown_prefix() -> None:
+    """A citation naming a real KB heading is kept, however the model wrote it.
+
+    The prompt shows headings as "# Heading" and tells the model to cite the heading it
+    sees, so a compliant answer carries the leading "#". The validator compared that
+    string against a "#"-stripped set and discarded the citation, which downgraded every
+    requirement to "unverified" and left the notification's applicability section with
+    no evidence at all. A citation must only be dropped when the heading is not in the KB.
+    """
+    assessments = [
+        _assessment(req.requirement, req.tender_evidence[0].quote, status="met")
+        for req in _REQUIREMENTS
+    ]
+    for cited in (f"# {_KB_HEADING}", _KB_HEADING, f"#{_KB_HEADING}", f"  {_KB_HEADING}  "):
+        payload = _full_payload(assessments=assessments, gaps=[], verdict="APPLY")
+        for asmt in payload.assessments:
+            asmt.company_evidence = [KBCitation(section=cited, quote=_KB_QUOTE)]
+
+        repaired = _apply_authoritative_overrides(payload, _REQUIREMENTS, _DEADLINE, _KB)
+
+        assert [c.section for c in repaired.assessments[0].company_evidence] == [
+            _KB_HEADING
+        ], f"citation {cited!r} was discarded"
+        assert repaired.assessments[0].status == "met"
+
+
+def test_kb_citation_to_an_unknown_heading_is_still_dropped() -> None:
+    """The tolerance above must not admit a heading the knowledge base does not contain.
+
+    Accepting any string would let a model satisfy docs/07 §7.3's citation requirement
+    by citing a section it invented.
+    """
+    payload = _full_payload(
+        assessments=[_assessment(_REQ_A, _QUOTE_A, status="met")],
+        requirements=[_REQ_A],
+        gaps=[],
+    )
+    payload.assessments[0].company_evidence = [
+        KBCitation(section="A Section We Never Wrote", quote="Fabricated.")
+    ]
+
+    repaired = _apply_authoritative_overrides(payload, _REQUIREMENTS, _DEADLINE, _KB)
+
+    assert repaired.assessments[0].company_evidence == []
+    assert repaired.assessments[0].status == "unverified"
+
+
+def test_genuine_unverified_reasoning_is_not_replaced_by_boilerplate() -> None:
+    """A model that explains why a requirement is unverified keeps its explanation.
+
+    Only empty text and schema placeholders are replaced. Overwriting every unverified
+    assessment with "No evidence on file" discarded the model's actual reasoning, which
+    is the only account of what OPEX would need in order to act.
+    """
+    reasoning = "No banking relationship is recorded; a bid guarantee must be arranged."
+    assessment = _assessment(_REQ_A, _QUOTE_A)
+    assessment["assessment"] = reasoning
+    assessment["gap"] = reasoning
+    payload = _full_payload(
+        assessments=[assessment], requirements=[_REQ_A], gaps=[reasoning]
+    )
+
+    repaired = _apply_authoritative_overrides(payload, _REQUIREMENTS, _DEADLINE, _KB)
+
+    assert repaired.assessments[0].assessment == reasoning
+    assert repaired.assessments[0].gap == reasoning
+
+
+def test_schema_placeholder_text_is_replaced_with_the_mandated_wording() -> None:
+    """docs/07 §7.2 requires the exact phrase when nothing is on file.
+
+    A model echoing the schema's angle-bracket filler carries no information and must
+    never reach a reader, so it becomes the mandated sentence.
+    """
+    assessment = _assessment(_REQ_A, _QUOTE_A, status="met")
+    assessment["company_evidence"] = []
+    assessment["assessment"] = "<one sentence explaining why>"
+    assessment["gap"] = "<specific gap, or null>"
+    payload = _full_payload(
+        assessments=[assessment], requirements=[_REQ_A], gaps=["<gap>"]
+    )
+
+    repaired = _apply_authoritative_overrides(payload, _REQUIREMENTS, _DEADLINE, _KB)
+
+    assert repaired.assessments[0].assessment == "No evidence on file for this requirement."
+    assert repaired.assessments[0].gap == "No evidence on file for this requirement."
+    assert repaired.gaps == ["No evidence on file for all requirements."]
+
+
+def test_assessment_is_not_rebound_when_the_model_drops_a_requirement() -> None:
+    """Evidence stays with the requirement the model actually described.
+
+    Binding by position alone moved requirement A's evidence onto requirement B whenever
+    the model returned fewer assessments than were extracted.
+    """
+    first = _assessment(_REQ_A, _QUOTE_A, status="met")
+    first["company_evidence"] = [KBCitation(section=_KB_HEADING, quote=_KB_QUOTE)]
+    payload = _full_payload(assessments=[first], requirements=[_REQ_A, _REQ_B, _REQ_C], gaps=[])
+
+    repaired = _apply_authoritative_overrides(payload, _REQUIREMENTS, _DEADLINE, _KB)
+
+    assert len(repaired.assessments) == 1
+    assert repaired.assessments[0].requirement == _REQ_A
+    assert repaired.assessments[0].company_evidence == [
+        KBCitation(section=_KB_HEADING, quote=_KB_QUOTE)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -447,7 +580,7 @@ def test_requirement_sources_rejects_invented_location() -> None:
             ],
         )
     ]
-    with pytest.raises(ValueError, match="requirement source evidence is invalid"):
+    with pytest.raises(ValueError, match="has invalid citation"):
         _validate_requirement_sources(RequirementExtraction(requirements=bad), _SOURCE_DOCS)
 
 

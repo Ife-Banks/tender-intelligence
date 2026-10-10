@@ -9,7 +9,7 @@ of the atomic claim, and the 0003 checksum-nullability migration on top of a 000
 from __future__ import annotations
 
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -64,6 +64,19 @@ def source_id(db_session: Session) -> int:
     )
     db_session.add(src)
     db_session.commit()
+    return int(src.id)
+
+
+def _seed_source(session: Session, *, name: str) -> int:
+    """Add a second Source row, for the tests that need more than one."""
+    src = Source(
+        name=name,
+        source_type="wahoo",
+        base_url="https://data.wahooas.org",
+        active=True,
+    )
+    session.add(src)
+    session.commit()
     return int(src.id)
 
 
@@ -400,7 +413,107 @@ def test_dedup_run_counts_land_in_run_history_via_repo(
         assert runs[-1].listings_found == 2
 
 
-# 13. Concurrency: two threads claim the same tender row ----------------------------------
+# 13. Unprocessed-backlog read (docs/13 O25) -------------------------------------------------
+def test_list_unprocessed_returns_only_new_rows_oldest_first(
+    db_session: Session, source_id: int
+) -> None:
+    """The recovery query selects ``new`` alone, oldest first, and honours its cap.
+
+    ``processed`` and ``verdict_failed`` must never appear: the first already has its verdict and
+    the second is terminal by explicit decision (docs/13-open-decisions.md O21). Re-driving
+    either would contradict that decision and re-send mail the business already received.
+    """
+    repo = TenderRepository(db_session)
+    claims = [
+        repo.claim_new(source_id, _listing(external_id=ext), f"cid-{ext}").tender
+        for ext in ("A", "B", "C")
+    ]
+    db_session.commit()
+    # Give the rows distinguishable ages so the ordering assertion is meaningful, and a future
+    # deadline so none of them is skipped as already expired.
+    for offset, tender in enumerate(claims):
+        tender.first_seen_at = D.replace(year=2026) + timedelta(days=offset)
+        tender.deadline = datetime(2027, 1, 1, tzinfo=UTC)
+    claims[0].status = "processed"
+    claims[1].status = "verdict_failed"
+    db_session.commit()
+
+    unprocessed = repo.list_unprocessed(source_id)
+    assert [t.external_id for t in unprocessed] == ["C"], (
+        "only status='new' rows are recoverable, oldest first"
+    )
+
+    # A cap bounds one run's recovery without hiding that the rest still exist.
+    db_session.add(
+        repo.claim_new(source_id, _listing(external_id="D"), "cid-D").tender
+    )
+    db_session.commit()
+    assert len(repo.list_unprocessed(source_id, limit=1)) == 1
+
+
+def test_list_unprocessed_is_scoped_to_one_source(db_session: Session, source_id: int) -> None:
+    """One source's backlog is never visible to another source's run."""
+    repo = TenderRepository(db_session)
+    other_source_id = _seed_source(db_session, name="other-source")
+    mine = repo.claim_new(source_id, _listing(external_id="MINE"), "cid-mine").tender
+    theirs = repo.claim_new(other_source_id, _listing(external_id="THEIRS"), "cid-theirs").tender
+    # Future deadlines: recovery skips anything already past its deadline.
+    mine.deadline = theirs.deadline = datetime(2027, 1, 1, tzinfo=UTC)
+    db_session.commit()
+
+    assert [t.external_id for t in repo.list_unprocessed(source_id)] == ["MINE"]
+    assert [t.external_id for t in repo.list_unprocessed(other_source_id)] == ["THEIRS"]
+
+
+def test_list_unprocessed_skips_expired_but_keeps_undated(
+    db_session: Session, source_id: int
+) -> None:
+    """A passed deadline retires the row; an unknown deadline does not.
+
+    Re-driving an expired tender spends an LLM call and an email on something unbidable. But a
+    tender whose deadline could not be determined is still worth assessing — docs/05 §5.2 treats
+    an unresolved deadline as a gap to report, not a reason to skip.
+    """
+    repo = TenderRepository(db_session)
+    now = datetime(2026, 10, 3, 12, 0, tzinfo=UTC)
+    past = repo.claim_new(source_id, _listing(external_id="PAST"), "cid-past").tender
+    future = repo.claim_new(source_id, _listing(external_id="FUTURE"), "cid-future").tender
+    undated = repo.claim_new(source_id, _listing(external_id="UNDATED"), "cid-undated").tender
+    past.deadline = now - timedelta(days=1)
+    future.deadline = now + timedelta(days=5)
+    undated.deadline = None
+    db_session.commit()
+
+    selected = {t.external_id for t in repo.list_unprocessed(source_id, now=now)}
+    assert selected == {"FUTURE", "UNDATED"}, (
+        "an expired tender must not be re-driven; an undated one must still be eligible"
+    )
+
+    # The expired ones are discoverable separately so they can be retired explicitly.
+    expired = repo.list_expired_unprocessed(now=now)
+    assert [t.external_id for t in expired] == ["PAST"]
+
+
+def test_expired_status_is_terminal(db_session: Session, source_id: int) -> None:
+    """``expired`` is a dead end: nothing transitions out of it, so it can never be revived."""
+    from tender_intelligence.db.repositories.base import PersistenceError
+    from tender_intelligence.db.repositories.status import assert_valid_transition
+
+    repo = TenderRepository(db_session)
+    tender = repo.claim_new(source_id, _listing(external_id="GONE"), "cid-gone").tender
+    repo.set_status(tender, "expired")
+    db_session.commit()
+
+    assert tender.status == "expired"
+    for target in ("new", "updated", "processed", "verdict_failed"):
+        with pytest.raises(PersistenceError):
+            assert_valid_transition(tender, target)
+
+    # And recovery cannot see it, because it selects `new` alone.
+    assert repo.list_unprocessed(source_id) == []
+
+
+# 14. Concurrency: two threads claim the same tender row ----------------------------------
 def test_concurrent_claims_leave_single_winner(tmp_path: Path, source_id: int) -> None:
     db_path = tmp_path / "claims.db"
     engine = build_engine(

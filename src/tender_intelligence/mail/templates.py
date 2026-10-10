@@ -7,7 +7,7 @@ cannot silently reinterpret an AI result.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import escape
@@ -63,6 +63,18 @@ class NotificationContent:
     previous_assessment_date: str = ""
     verdict_changed: bool | None = None
     requirements_label: str = "Tender"
+    #: True when Stage B produced no verdict (v1.1 §5.6). Drives the "automatic assessment
+    #: unavailable" banner and suppresses the verdict-specific sections, so a raw notice can
+    #: never be mistaken for an assessment.
+    assessment_unavailable: bool = False
+    #: Machine-readable reason, shown verbatim so the failure is diagnosable from the email.
+    unavailability_reason: str | None = None
+    #: True when an assessment *was* produced but from the tender's published notice alone,
+    #: because no downloadable document was offered. Distinct from
+    #: ``assessment_unavailable``: there is a verdict here, and saying otherwise would be as
+    #: misleading as claiming a document was read. Renders the "No Downloadable source files"
+    #: caveat so the reader knows what the assessment rests on.
+    notice_only_assessment: bool = False
 
 
 def base_subject(content: NotificationContent) -> str:
@@ -75,7 +87,9 @@ def base_subject(content: NotificationContent) -> str:
     title = content.title.strip()
     if len(title) > 60:
         title = title[:57] + "..."
-    
+
+    if content.kind == NotificationKind.RAW_NOTICE:
+        return f"{source} RAW NOTICE (assessment unavailable): {title}"
     if content.kind == NotificationKind.UPDATE:
         changed = content.update_summary.strip()
         tail = f": {changed}" if changed else ""
@@ -176,6 +190,164 @@ def _confidence(value: float | None) -> str:
     return f"{max(0.0, min(1.0, float(value))):.0%}"
 
 
+#: Requirement statuses as a human reads them. docs/07 §7.3: an uncited claim is
+#: downgraded to "unverified", which is a statement about our records, not a claim
+#: that the company lacks the capability.
+_STATUS_LABELS = {
+    "met": "Met",
+    "partially_met": "Partially met",
+    "not_met": "Not met",
+    "unverified": "Unverified - no company evidence on file",
+}
+
+
+def _status_label(value: Any) -> str:
+    text = _text_value(value).strip()
+    return _STATUS_LABELS.get(text.casefold(), text) or _STATUS_LABELS["unverified"]
+
+
+def _is_assessment(item: Mapping[str, Any]) -> bool:
+    """True when a mapping is a verdict assessment rather than free-form evidence.
+
+    Section 3 reports applicability per requirement. A mapping that carries no
+    requirement and no status is not an assessment, so it belongs to Section 2 only -
+    repeating it in Section 3 would duplicate the text without adding evidence.
+    """
+
+    return "requirement" in item or "status" in item
+
+
+def _requirement_blocks(items: Iterable[Any]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Section 2 blocks: what the tender requires, quoted from the tender itself."""
+
+    blocks: list[tuple[str, tuple[str, ...]]] = []
+    for item in items:
+        if not isinstance(item, Mapping) or not _is_assessment(item):
+            # Not a verdict assessment. Render it whole rather than dropping any of
+            # its fields - a structured requirement must never lose a citation.
+            rendered = _text_value(item).strip()
+            if rendered:
+                blocks.append((rendered, ()))
+            continue
+        requirement = _text_value(item.get("requirement")).strip()
+        if not requirement:
+            continue
+        details: list[str] = []
+        for citation in item.get("tender_evidence") or ():
+            if not isinstance(citation, Mapping):
+                rendered = _text_value(citation).strip()
+                if rendered:
+                    details.append(rendered)
+                continue
+            quote = _text_value(citation.get("quote")).strip()
+            location = _text_value(citation.get("location")).strip()
+            document_id = citation.get("document_id")
+            where = " ".join(
+                part
+                for part in (
+                    f"document {document_id}" if document_id not in (None, "") else "",
+                    location,
+                )
+                if part
+            )
+            if quote and where:
+                details.append(f'Stated in the tender: "{quote}" ({where})')
+            elif quote:
+                details.append(f'Stated in the tender: "{quote}"')
+            elif where:
+                details.append(f"Stated in the tender at {where}")
+        blocks.append((requirement, tuple(details)))
+    return tuple(blocks)
+
+
+def _company_evidence_lines(citations: Any) -> tuple[str, ...]:
+    """Knowledge-base citations, each labelled with the section it came from."""
+
+    if not isinstance(citations, (list, tuple)):
+        return ()
+    lines: list[str] = []
+    for citation in citations:
+        if not isinstance(citation, Mapping):
+            rendered = _text_value(citation).strip()
+            if rendered:
+                lines.append(rendered)
+            continue
+        quote = _text_value(citation.get("quote")).strip()
+        section = _text_value(citation.get("section")).strip()
+        if quote and section:
+            lines.append(f'Company evidence (KB "{section}"): "{quote}"')
+        elif quote:
+            lines.append(f'Company evidence: "{quote}"')
+        elif section:
+            lines.append(f"Company evidence (KB): {section}")
+    return tuple(lines)
+
+
+def _applicability_blocks(
+    items: Iterable[Any], fallback: Iterable[Any]
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Section 3 blocks: requirement-by-requirement evidence (docs/07 §7.2, §7.3).
+
+    ``fallback`` carries the model's standalone gap strings. They are appended only when
+    a gap is not already attributed to a requirement, so nothing is shown twice.
+    """
+
+    blocks: list[tuple[str, tuple[str, ...]]] = []
+    claimed: set[str] = set()
+    for item in items:
+        if not isinstance(item, Mapping) or not _is_assessment(item):
+            continue
+        requirement = _text_value(item.get("requirement")).strip() or "(unnamed requirement)"
+        details: list[str] = []
+        assessment = _text_value(item.get("assessment")).strip()
+        if assessment:
+            details.append(f"Assessment: {assessment}")
+        details.extend(_company_evidence_lines(item.get("company_evidence")))
+        gap = _text_value(item.get("gap")).strip()
+        if gap:
+            details.append(f"Gap: {gap}")
+            claimed.add(gap)
+        blocks.append((f"{requirement} - {_status_label(item.get('status'))}", tuple(details)))
+
+    if not blocks:
+        return tuple(("", (rendered,)) for rendered in _items(fallback) if rendered)
+
+    extra: list[str] = []
+    for item in fallback:
+        raw = item.get("gap") if isinstance(item, Mapping) else item
+        value = _text_value(raw).strip()
+        if value and value not in claimed:
+            extra.append(value)
+    if extra:
+        blocks.append(("Other gaps reported", tuple(extra)))
+    return tuple(blocks)
+
+
+def _render_blocks_text(
+    blocks: tuple[tuple[str, tuple[str, ...]], ...], empty: str
+) -> list[str]:
+    if not blocks:
+        return [f"- {empty}"]
+    lines: list[str] = []
+    for title, details in blocks:
+        lines.append(f"- {title}" if title else "-")
+        lines.extend(f"    {detail}" for detail in details)
+    return lines
+
+
+def _render_blocks_html(
+    blocks: tuple[tuple[str, tuple[str, ...]], ...], empty: str
+) -> str:
+    if not blocks:
+        return f"<ul><li>{escape(empty)}</li></ul>"
+    items: list[str] = []
+    for title, details in blocks:
+        parts = [escape(title)] if title else []
+        parts.extend(escape(detail) for detail in details)
+        items.append(f"<li>{'<br>'.join(parts)}</li>")
+    return "<ul>" + "".join(items) + "</ul>"
+
+
 def _update_lines(content: NotificationContent) -> list[str]:
     if content.kind != NotificationKind.UPDATE:
         return []
@@ -217,28 +389,99 @@ def _notes_footer(content: NotificationContent) -> list[str]:
         notes.append("Documents skipped by processing: " + ", ".join(content.skipped_filenames))
     if content.incomplete_inputs:
         notes.append("Note: the verdict was reached on incomplete inputs. incomplete_inputs=true")
+    if content.notice_only_assessment and not content.assessment_unavailable:
+        notes.append(
+            "Note: no downloadable source files were available; this assessment used the "
+            "tender's published notice only"
+        )
     return notes
+
+
+#: Banner shown when Stage B produced no verdict (v1.1 §5.6 requires the raw notice to carry a
+#: clear "automatic assessment unavailable" statement so the mail is not read as an assessment).
+ASSESSMENT_UNAVAILABLE_BANNER = "AUTOMATIC ASSESSMENT UNAVAILABLE"
+
+#: Shown when a verdict exists but rests on the tender's published notice because the source
+#: offered no downloadable document. Stated up front, before any requirement, because a reader
+#: who reaches Section 3 has already begun trusting the analysis — the caveat has to arrive
+#: before the reasoning it qualifies, not after it.
+NO_DOWNLOADABLE_SOURCES_BANNER = "NO DOWNLOADABLE SOURCE FILES"
+
+
+def _notice_only_notice(content: NotificationContent) -> list[str]:
+    """The lines describing a notice-only assessment, or ``[]`` when it does not apply."""
+    if not content.notice_only_assessment or content.assessment_unavailable:
+        return []
+    return [
+        NO_DOWNLOADABLE_SOURCES_BANNER,
+        "This assessment is based only on the tender's published notice — the tender document "
+        "was not available for download. Eligibility, qualification and scoring criteria stated "
+        "only in that document have not been assessed, and the confidence below is reduced to "
+        "reflect this.",
+    ]
+
+
+def _unavailability_reason(content: NotificationContent) -> str:
+    """One sentence naming why the assessment is missing.
+
+    The machine-readable reason from the pipeline is shown verbatim when present, because that
+    is what makes the failure diagnosable from the inbox; otherwise a neutral fallback keeps the
+    banner from being empty.
+    """
+    reason = (content.unavailability_reason or "").strip()
+    if not reason:
+        return (
+            "The automated assessment could not be completed for this tender. "
+            "The source notice is provided below for manual review."
+        )
+    return (
+        f"The automated assessment could not be completed ({reason}). "
+        "The source notice is provided below for manual review."
+    )
 
 
 def render_text(content: NotificationContent) -> str:
     """Render the substantive notification in deterministic plain text."""
 
     lines: list[str] = [f"Subject: {subject(content)}", ""]
+    if content.assessment_unavailable:
+        lines.append(ASSESSMENT_UNAVAILABLE_BANNER)
+        lines.append(_unavailability_reason(content))
+        lines.append("")
+    notice_only_lines = _notice_only_notice(content)
+    if notice_only_lines:
+        lines.extend(notice_only_lines)
+        lines.append("")
     lines.append("1. Background")
     lines.append(content.background_summary.strip() or "(no background summary available)")
     lines.append("")
 
     lines.append(f"2. Requirements for {content.requirements_label}")
-    requirements = _items(content.requirements_summary)
-    lines.extend(f"- {item}" for item in requirements or ("(no requirements summary available)",))
+    lines.extend(
+        _render_blocks_text(
+            _requirement_blocks(content.requirements_summary),
+            "(no requirements summary available)",
+        )
+    )
     if content.deadline is not None:
         lines.append(format_deadline(content.deadline, content.deadline_timezone))
     lines.append("")
 
     lines.append("3. Why We Can / Cannot Apply")
-    gaps = _items(content.gap_analysis)
-    lines.extend(f"- {item}" for item in gaps or ("(no comparison analysis available)",))
-    lines.append(f"Final verdict: {content.verdict} (confidence {_confidence(content.confidence)})")
+    lines.extend(
+        _render_blocks_text(
+            _applicability_blocks(content.requirements_summary, content.gap_analysis),
+            "(no comparison analysis available)",
+        )
+    )
+    if content.assessment_unavailable:
+        # Say plainly that there is no verdict. Printing an empty recommendation here would
+        # read as a formatting glitch rather than a failure the reader must act on.
+        lines.append("Final verdict: NOT ASSESSED (automatic assessment unavailable)")
+    else:
+        lines.append(
+            f"Final verdict: {content.verdict} (confidence {_confidence(content.confidence)})"
+        )
 
     update_lines = _update_lines(content)
     if update_lines:
@@ -290,37 +533,67 @@ def _notes_footer_html(content: NotificationContent) -> str:
         items.append(
             "<li>Note: the verdict was reached on incomplete inputs. incomplete_inputs=true</li>"
         )
+    if content.notice_only_assessment and not content.assessment_unavailable:
+        items.append(
+            "<li>Note: no downloadable source files were available; this assessment used the "
+            "tender's published notice only</li>"
+        )
     return "".join(items)
-
-
-def _ul(items: Iterable[Any]) -> str:
-    values = _items(items)
-    if not values:
-        values = ("(no items available)",)
-    return "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in values) + "</ul>"
 
 
 def render_html(content: NotificationContent) -> str:
     """Render an escaped HTML equivalent; the plain-text body remains authoritative."""
 
     background = content.background_summary.strip() or "(no background summary available)"
-    body: list[str] = [
-        f"<h1>{escape(subject(content))}</h1>",
-        "<h2>1. Background</h2>",
-        f"<p>{escape(background)}</p>",
-        f"<h2>2. Requirements for {escape(content.requirements_label)}</h2>",
-        _ul(content.requirements_summary),
-    ]
+    body: list[str] = [f"<h1>{escape(subject(content))}</h1>"]
+    if content.assessment_unavailable:
+        body.append(
+            '<p style="background:#fff3cd;border:1px solid #ffe08a;padding:12px;'
+            'font-weight:bold;">'
+            f"{escape(ASSESSMENT_UNAVAILABLE_BANNER)}</p>"
+        )
+        body.append(f"<p>{escape(_unavailability_reason(content))}</p>")
+    notice_only_lines = _notice_only_notice(content)
+    if notice_only_lines:
+        body.append(
+            '<p style="background:#e8f4fd;border:1px solid #9ec9e8;padding:12px;'
+            'font-weight:bold;">'
+            f"{escape(notice_only_lines[0])}</p>"
+        )
+        body.append(f"<p>{escape(' '.join(notice_only_lines[1:]))}</p>")
+    body.extend(
+        [
+            "<h2>1. Background</h2>",
+            f"<p>{escape(background)}</p>",
+            f"<h2>2. Requirements for {escape(content.requirements_label)}</h2>",
+            _render_blocks_html(
+                _requirement_blocks(content.requirements_summary),
+                "(no requirements summary available)",
+            ),
+        ]
+    )
     if content.deadline is not None:
         deadline = format_deadline(content.deadline, content.deadline_timezone)
         body.append(f"<p><strong>{escape(deadline)}</strong></p>")
     confidence = _confidence(content.confidence)
+    if content.assessment_unavailable:
+        verdict_html = (
+            "<p><strong>Final verdict: NOT ASSESSED "
+            "(automatic assessment unavailable)</strong></p>"
+        )
+    else:
+        verdict_html = (
+            f"<p><strong>Final verdict: {escape(content.verdict)}</strong> "
+            f"(confidence {confidence})</p>"
+        )
     body.extend(
         [
             "<h2>3. Why We Can / Cannot Apply</h2>",
-            _ul(content.gap_analysis),
-            f"<p><strong>Final verdict: {escape(content.verdict)}</strong> "
-            f"(confidence {confidence})</p>",
+            _render_blocks_html(
+                _applicability_blocks(content.requirements_summary, content.gap_analysis),
+                "(no comparison analysis available)",
+            ),
+            verdict_html,
         ]
     )
     update_lines = _update_lines(content)

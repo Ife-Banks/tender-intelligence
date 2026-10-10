@@ -45,12 +45,13 @@ from tender_intelligence.notifications.channels import (
     EmailNotificationChannel,
     NotificationDispatcher,
 )
-from tender_intelligence.notifications.contracts import NotificationEvent
+from tender_intelligence.notifications.contracts import NotificationEvent, NotificationKind
 from tender_intelligence.notifications.service import (
     NotificationError,
     NotificationSafetyError,
     NotificationService,
     NullMailAlertHook,
+    _assessed_from_notice_only,
 )
 from tender_intelligence.storage.local import LocalFileSystemStorage
 
@@ -550,6 +551,186 @@ class TestMissingVerdict:
         service = world.service(_Handler(200))
         with pytest.raises(NotificationError):
             service.notify_tender(99999)
+
+
+class TestRawNoticeWhenAssessmentUnavailable:
+    """v1.1 §5.6: a failed Stage B still reports the tender, so nothing is silently lost."""
+
+    def _event(self, tender, reason: str = "requirement_sources_unavailable"):
+        return NotificationEvent(
+            tender_id=tender.id,
+            verdict_id=None,
+            kind=NotificationKind.RAW_NOTICE,
+            material_change=False,
+            correlation_id=tender.correlation_id,
+            unavailability_reason=reason,
+        )
+
+    def test_raw_notice_is_sent_to_dev_recipients(self, world) -> None:
+        world.add_dev("dev@opex.example")
+        _, tender, _, _ = world.seed_tender(with_verdict=False)
+        world.add_provider(name="sendlib-one")
+        handler = _Handler(200)
+        service = world.service(handler)
+
+        outcome = service.notify_tender(tender.id, event=self._event(tender))
+
+        assert outcome.status == "sent", outcome.error_code
+        with world.session_factory() as session:
+            rows = _logs(session)
+            assert len(rows) == 1
+            assert rows[0].verdict_id is None, "a raw notice must not claim a verdict"
+            assert rows[0].recipients_snapshot[0]["list_type"] == "dev_alert"
+
+    def test_raw_notice_never_reaches_business_recipients_in_test_mode_off(self, world) -> None:
+        """The rule is about the message kind, not the Test Mode switch.
+
+        A raw notice carries no assessment, so it must not be delivered as if it were one even
+        with Test Mode explicitly turned off and business recipients configured.
+        """
+        world.add_dev("dev@opex.example")
+        world.add_business("ops@opex.example")
+        world.set_test_mode(False)
+        _, tender, _, _ = world.seed_tender(with_verdict=False)
+        world.add_provider(name="sendlib-one")
+        handler = _Handler(200)
+        service = world.service(handler)
+
+        outcome = service.notify_tender(tender.id, event=self._event(tender))
+
+        assert outcome.status == "sent"
+        payload = json.loads(handler.requests[-1].content)
+        assert payload["to"] == ["dev@opex.example"]
+        assert "ops@opex.example" not in payload["to"]
+
+    def test_raw_notice_body_carries_the_unavailable_banner_and_reason(self, world) -> None:
+        world.add_dev("dev@opex.example")
+        _, tender, _, _ = world.seed_tender(with_verdict=False)
+        world.add_provider(name="sendlib-one")
+        handler = _Handler(200)
+        service = world.service(handler)
+
+        service.notify_tender(tender.id, event=self._event(tender))
+
+        payload = json.loads(handler.requests[-1].content)
+        body = f"{payload['subject']}\n{payload.get('text', '')}\n{payload.get('html', '')}"
+        assert "RAW NOTICE" in payload["subject"]
+        assert "AUTOMATIC ASSESSMENT UNAVAILABLE" in body
+        assert "requirement_sources_unavailable" in body
+        # An empty recommendation must not be printed as if it were a verdict.
+        assert "NOT ASSESSED" in body
+
+    def test_raw_notice_is_deduplicated_across_repeated_attempts(self, world) -> None:
+        """A retried failure must not send a fresh email each pass.
+
+        The dedupe key substitutes a stable sentinel when there is no verdict, so the key does
+        not drift with attempt count or timestamp.
+        """
+        world.add_dev("dev@opex.example")
+        _, tender, _, _ = world.seed_tender(with_verdict=False)
+        world.add_provider(name="sendlib-one")
+        handler = _Handler(200)
+        service = world.service(handler)
+        event = self._event(tender)
+
+        first = service.notify_tender(tender.id, event=event)
+        second = service.notify_tender(tender.id, event=event)
+
+        assert first.status == "sent"
+        assert second.status == "already_notified"
+        assert first.dedupe_key == second.dedupe_key
+        with world.session_factory() as session:
+            assert len(_logs(session)) == 1
+
+    def test_normal_kind_still_refuses_to_send_without_a_verdict(self, world) -> None:
+        """Relaxing ``verdict_id`` must not let an assessment mail go out with no assessment."""
+        world.add_dev("dev@opex.example")
+        _, tender, _, _ = world.seed_tender(with_verdict=False)
+        world.add_provider(name="sendlib-one")
+        service = world.service(_Handler(200))
+
+        event = NotificationEvent(tender_id=tender.id, verdict_id=None)
+        with pytest.raises(NotificationError) as caught:
+            service.notify_tender(tender.id, event=event)
+        assert caught.value.error_code == NOTIFICATION_NO_VERDICT
+
+
+class TestNoticeOnlyAssessment:
+    """A verdict that exists, reached from the tender's published notice instead of a file.
+
+    TenderDetail's shape: the detail page carries a real description, the tender document is
+    behind a subscription. The mail must say the assessment rests on the notice, and must still
+    carry the verdict — claiming "assessment unavailable" here would throw away a real result.
+    """
+
+    def _event(self, tender, verdict):
+        return NotificationEvent(
+            tender_id=tender.id,
+            verdict_id=verdict.id,
+            kind=NotificationKind.NEW,
+            material_change=False,
+            correlation_id=tender.correlation_id,
+        )
+
+    def _deliver(self, world, *, documents):
+        world.add_dev("dev@opex.example")
+        _, tender, _, verdict = world.seed_tender(documents=documents)
+        assert verdict is not None
+        world.add_provider(name="sendlib-one")
+        handler = _Handler(200)
+        world.service(handler).notify_tender(tender.id, event=self._event(tender, verdict))
+        return tender, json.loads(handler.requests[-1].content)
+
+    def test_the_mail_states_that_no_source_files_were_available(self, world) -> None:
+        _, payload = self._deliver(world, documents=())
+        body = f"{payload['subject']}\n{payload.get('text', '')}\n{payload.get('html', '')}"
+        assert "NO DOWNLOADABLE SOURCE FILES" in body
+
+    def test_the_verdict_is_still_reported(self, world) -> None:
+        # The point of the fallback: the reader gets an assessment, not a gap in one.
+        _, payload = self._deliver(world, documents=())
+        body = f"{payload['subject']}\n{payload.get('text', '')}"
+        assert "APPLY" in body
+        assert "NOT ASSESSED" not in body
+
+    def test_it_is_not_reported_as_an_unavailable_assessment(self, world) -> None:
+        _, payload = self._deliver(world, documents=())
+        body = f"{payload['subject']}\n{payload.get('text', '')}\n{payload.get('html', '')}"
+        assert "AUTOMATIC ASSESSMENT UNAVAILABLE" not in body
+
+    def test_a_tender_with_a_document_is_not_caveated(self, world) -> None:
+        _, payload = self._deliver(
+            world, documents=(("annex.pdf", b"%PDF-1.4 fake bytes"),)
+        )
+        body = f"{payload['subject']}\n{payload.get('text', '')}\n{payload.get('html', '')}"
+        assert "NO DOWNLOADABLE SOURCE FILES" not in body
+
+
+class TestNoticeOnlyDetection:
+    """The derivation that decides "the source offered no file", from state the renderer holds.
+
+    All three file collections must be empty. `pairs` empty with `failed` or `skipped`
+    populated means files *were* offered and something went wrong with them — calling that "no
+    downloadable source files" would misstate what the source did.
+    """
+
+    def test_a_verdict_with_no_files_at_all_is_notice_only(self) -> None:
+        assert _assessed_from_notice_only(object(), [], [], []) is True
+
+    def test_no_verdict_is_never_notice_only(self) -> None:
+        # Without a verdict this is the raw-notice path, which has its own banner.
+        assert _assessed_from_notice_only(None, [], [], []) is False
+
+    def test_an_attachable_document_is_not_notice_only(self) -> None:
+        assert _assessed_from_notice_only(object(), [("doc", "obj")], [], []) is False
+
+    def test_a_failed_download_is_not_reported_as_no_source_files(self) -> None:
+        assert _assessed_from_notice_only(object(), [], ["tor.pdf"], []) is False
+
+    def test_a_skipped_document_is_not_reported_as_no_source_files(self) -> None:
+        # The file existed and was readable enough to be skipped by the extractor, so the
+        # source did offer a source file.
+        assert _assessed_from_notice_only(object(), [], [], ["archive.zip"]) is False
 
 
 class TestDurableOutboxAndBanner:

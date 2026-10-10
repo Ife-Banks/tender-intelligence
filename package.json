@@ -1,6 +1,10 @@
 {
-  "dependencies": {
-    "@neon/config": "^1.7.2",
-    "@neon/env": "^1.4.3"
+  "name": "tender-intelligence",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:ui": "node --test tests/ui/*.mjs",
+    "test:ui:coverage": "node --test --experimental-test-coverage tests/ui/*.mjs"
   }
 }

@@ -378,7 +378,7 @@ export class FixtureAdminApi {
     const record = { id: this.nextId++, active: true, ...body };
     if (path === "/sources" && Object.hasOwn(record, "auth")) { record.auth_configured = Boolean(record.auth); delete record.auth; }
     if (path === "/llm/profiles" && Object.hasOwn(record, "api_key")) { record.api_key_configured = Boolean(record.api_key); delete record.api_key; }
-    if (path === "/mail/providers" && Object.hasOwn(record, "credentials")) { record.credentials_configured = Boolean(record.credentials); delete record.credentials; }
+    if (path === "/mail/providers" && Object.hasOwn(record, "credentials")) { record.credentials_set = Boolean(record.credentials); delete record.credentials; }
     this.collection(path).push(record);
     return cloneFixture(record);
   }
@@ -388,7 +388,7 @@ export class FixtureAdminApi {
     if (!record) throw new ApiError({ status: 404, code: "not_found" });
     if (path === "/recipients" && record.active && changes.active === false && record.list_type === "dev_alert" && this.collection(path).filter((entry) => entry.list_type === "dev_alert" && entry.active).length <= 1) throw new ApiError({ status: 409, code: "last_dev_recipient" });
     if (path === "/sources" && Object.hasOwn(changes, "auth")) { record.auth_configured = Boolean(changes.auth); delete changes.auth; }
-    if (path === "/mail/providers" && Object.hasOwn(changes, "credentials")) { record.credentials_configured = Boolean(changes.credentials); delete changes.credentials; }
+    if (path === "/mail/providers" && Object.hasOwn(changes, "credentials")) { record.credentials_set = Boolean(changes.credentials); delete changes.credentials; }
     if (path === "/llm/profiles" && Object.hasOwn(changes, "api_key")) { record.api_key_configured = Boolean(changes.api_key) || record.api_key_configured; delete changes.api_key; }
     Object.assign(record, changes);
     return cloneFixture(record);
@@ -464,12 +464,27 @@ export { FixtureAdminApi as AdminApi };
 export async function createApi() {
   const live = new LiveAdminApi();
   const state = await live.probe();
-  if (state === "offline") {
-    // Could not reach the server at all — fall back to fixtures.
-    return new FixtureAdminApi();
-  }
-  if (state === "live" || state === "forbidden") return live;
+  // Fixtures are a demonstration aid, never a silent fallback. Substituting demo data
+  // for an unreachable server let an operator read - and try to change - configuration
+  // that does not exist, with writes silently discarded on refresh. Fixtures are now
+  // reachable only by asking for them explicitly.
+  if (state === "offline" && allowFixtures()) return new FixtureAdminApi();
   return live;
+}
+
+/**
+ * Whether the caller explicitly opted into fixture-backed preview.
+ *
+ * Enabled by `?fixtures=1` (or the DEMO/prevw query used by the offline preview
+ * server). Any real URL without it means the console must talk to the live API.
+ */
+function allowFixtures() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("fixtures") === "1" || params.get("demo") === "1";
+  } catch {
+    return false;
+  }
 }
 
 export { DEMO_SCENARIOS };

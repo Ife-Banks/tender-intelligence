@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import uuid
 from collections.abc import Callable
 
 import pytest
@@ -459,6 +460,197 @@ def test_stage_b_provider_failure_is_persisted_and_reported_as_partial(
         assert session.query(Verdict).count() == 0
         failed_calls = session.query(LLMCall).filter_by(role="verdict", status="failed").all()
         assert len(failed_calls) == len(LISTING_EXTERNAL_IDS)
+
+
+def test_verdict_failure_still_dispatches_a_raw_notice(
+    session_factory_gr, tmp_path
+) -> None:
+    """v1.1 §5.6 / docs/04 §4.2 — a failed assessment is still reported, not dropped.
+
+    The reported production symptom was exactly this: Stage B failed, and stage 15 sent
+    nothing at all, so nobody was told the tender existed. A RAW_NOTICE event must reach the
+    dispatcher for every tender whose verdict is unavailable.
+    """
+    client = _CoordinatorVerdictClient(fail=True)
+
+    class _CaptureNotifications:
+        def __init__(self) -> None:
+            self.events = []
+
+        def send(self, event, *, dry_run=False):
+            self.events.append(event)
+            from tender_intelligence.notifications.contracts import NotificationOutcome
+
+            return NotificationOutcome(status="sent")
+
+    dispatcher = _CaptureNotifications()
+    harness = build_harness(
+        session_factory_gr,
+        tmp_path,
+        verdict_client_factory=lambda _profile: client,
+        coordinator_overrides={"notification_dispatcher": dispatcher},
+    )
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+    _configure_coordinator_verdict(session_factory_gr, harness)
+
+    report = harness.coordinator.run_source(source_id)
+
+    assert report.stage(StageNumber.VERDICT).status is StageStatus.PARTIAL
+    assert report.stage(StageNumber.NOTIFICATION).status is StageStatus.COMPLETED, (
+        report.stage_map()
+    )
+
+    # One raw notice per tender, carrying no verdict and the machine-readable reason.
+    assert len(dispatcher.events) == len(LISTING_EXTERNAL_IDS)
+    from tender_intelligence.notifications.contracts import NotificationKind
+
+    for event in dispatcher.events:
+        assert event.kind is NotificationKind.RAW_NOTICE
+        assert event.verdict_id is None
+        assert event.unavailability_reason, "the failure reason must reach the notice"
+        assert event.tender_id is not None
+
+    # And the run reports them as delivered rather than silently doing nothing.
+    assert "raw notice" in (report.stage(StageNumber.NOTIFICATION).detail or "")
+
+
+def _gated_detail_html() -> str:
+    """The TenderDetail shape: a real description, no downloadable tender document.
+
+    Produced by removing only the attachments block from the standard WAHO fixture, so every
+    other thing the parser reads — reference, dates, client, description, requirements — is the
+    same page a real run sees. The difference is exactly the one that matters: the files are not
+    offered.
+    """
+    import re
+
+    return re.sub(
+        r'\s*<div class="attachments">.*?</div>\s*(?=</div>)',
+        "",
+        fixture("detail_en_complete.html"),
+        flags=re.DOTALL,
+    )
+
+
+def _gated_source_harness(session_factory_gr, tmp_path, *, dispatcher):
+    site = OfflineSite(
+        detail_by_tender={
+            tender_id: _gated_detail_html() for tender_id in LISTING_EXTERNAL_IDS
+        }
+    )
+    client = _CoordinatorVerdictClient()
+    harness = build_harness(
+        session_factory_gr,
+        tmp_path,
+        site=site,
+        ocr=StubOcrEngine(),
+        verdict_client_factory=lambda _profile: client,
+        coordinator_overrides={"notification_dispatcher": dispatcher},
+    )
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+    _configure_coordinator_verdict(session_factory_gr, harness)
+    return harness, source_id, client
+
+
+def test_a_portal_with_no_documents_still_reaches_a_verdict(session_factory_gr, tmp_path) -> None:
+    """The reported production symptom, reproduced end to end.
+
+    A source that publishes a description but withholds the tender document used to produce
+    ``requirement_sources_unavailable`` for every tender and nothing the business could act on.
+    The notice text the page does carry is enough to assess, so these tenders must now reach
+    Stage B.
+    """
+    from tender_intelligence.notifications.contracts import NotificationKind
+
+    class _CaptureNotifications:
+        def __init__(self) -> None:
+            self.events = []
+
+        def send(self, event, *, dry_run=False):
+            self.events.append(event)
+            from tender_intelligence.notifications.contracts import NotificationOutcome
+
+            return NotificationOutcome(status="sent")
+
+    dispatcher = _CaptureNotifications()
+    harness, source_id, client = _gated_source_harness(
+        session_factory_gr, tmp_path, dispatcher=dispatcher
+    )
+
+    report = harness.coordinator.run_source(source_id)
+
+    assert report.documents_acquired == 0, "the fixture must offer no downloadable file"
+    # PARTIAL, not COMPLETED: every notice-only bundle records incomplete_inputs, and an
+    # incomplete bundle has always counted towards failed_items (prompt 09 §16, §19 G). The run
+    # still reaches Stage B — that is the difference this feature makes.
+    assert report.stage(StageNumber.PROCESSING).status is StageStatus.PARTIAL
+    assert "assessed from the published notice alone" in (
+        report.stage(StageNumber.PROCESSING).detail or ""
+    )
+    # A verdict per tender, not a raw notice: the whole point of the fallback.
+    assert report.stage(StageNumber.VERDICT).status is StageStatus.COMPLETED
+    assert client.calls > 0
+    with harness.session_factory() as session:
+        verdicts = list(session.scalars(select(Verdict)).all())
+        assert len(verdicts) == len(LISTING_EXTERNAL_IDS)
+        for verdict in verdicts:
+            assert verdict.incomplete_inputs is True
+    assert dispatcher.events
+    for event in dispatcher.events:
+        assert event.kind is not NotificationKind.RAW_NOTICE
+
+
+def test_a_notice_only_verdict_is_not_reported_as_unassessable(
+    session_factory_gr, tmp_path
+) -> None:
+    """Confidence is reduced and the limitation is present, so the reader can tell.
+
+    A verdict on a summary that looks like a verdict on the document is the failure this
+    feature would introduce if it stopped at "produce a verdict somehow".
+    """
+    from tender_intelligence.verdict.service import (
+        NOTICE_ONLY_CONFIDENCE_PENALTY,
+        NOTICE_ONLY_LIMITATION,
+    )
+
+    class _CaptureNotifications:
+        def send(self, event, *, dry_run=False):
+            from tender_intelligence.notifications.contracts import NotificationOutcome
+
+            return NotificationOutcome(status="sent")
+
+    harness, source_id, _client = _gated_source_harness(
+        session_factory_gr, tmp_path, dispatcher=_CaptureNotifications()
+    )
+
+    harness.coordinator.run_source(source_id)
+
+    with harness.session_factory() as session:
+        verdicts = list(session.scalars(select(Verdict)).all())
+        assert verdicts
+        for verdict in verdicts:
+            # The stub reports 0.4; the penalty is applied in code, so it must not survive.
+            assert verdict.confidence == pytest.approx(
+                0.4 - NOTICE_ONLY_CONFIDENCE_PENALTY, abs=1e-6
+            )
+            assert verdict.incomplete_inputs is True
+    assert NOTICE_ONLY_LIMITATION
+
+
+def test_a_portal_with_documents_is_unaffected(session_factory_gr, tmp_path) -> None:
+    """Regression guard: the fallback must be inert when files *are* available."""
+    harness = build_harness(session_factory_gr, tmp_path, ocr=StubOcrEngine())
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+
+    report = harness.coordinator.run_source(source_id)
+
+    assert report.documents_acquired > 0
+    assert "published notice alone" not in (
+        report.stage(StageNumber.PROCESSING).detail or ""
+    )
 
 
 def test_run_only_touches_the_configured_source(session_factory_gr, tmp_path) -> None:
@@ -978,6 +1170,290 @@ def test_dry_run_reports_the_plan_and_persists_nothing(session_factory_gr, tmp_p
     live = harness.coordinator.run_source(source_id)
     assert live.status is RunStatus.COMPLETED
     assert len(_tenders(session_factory_gr, source_id)) == 3
+
+
+# ------------------------------------------------- unprocessed-backlog recovery
+#
+# Recovery is opt-in (``unprocessed_recovery_limit`` defaults to 0). ``status='new'`` cannot by
+# itself distinguish a tender whose run was interrupted from one that completed every configured
+# stage and simply had no verdict stage to advance it — so an always-on recovery would re-drive
+# already-finished work and break the §13 contract that these tests also protect. Each test
+# below opts in explicitly and asserts one property of the edge.
+
+
+def _recovery_detail_html() -> str:
+    return fixture("detail_en_complete.html")
+
+
+def _recovery_site(*external_ids: str) -> OfflineSite:
+    """An offline site that also serves a detail page for each recovery-only tender id.
+
+    The stranded rows use ids the listing fixtures do not advertise, so without this the detail
+    fetch 404s and the test would assert a fixture gap rather than the recovery edge.
+    """
+    detail = dict.fromkeys(LISTING_EXTERNAL_IDS, _recovery_detail_html())
+    detail.update(dict.fromkeys(external_ids, _recovery_detail_html()))
+    return OfflineSite(detail_by_tender=detail)
+
+
+def _strand_one_tender(session_factory, source_id: int, external_id: str) -> int:
+    """Persist a tender row the way dedup does, then leave it at ``new`` forever.
+
+    Reproduces the reported failure exactly: a run interrupted *after* persistence and *before*
+    the verdict leaves a row that every later crawl classifies ``UNCHANGED``.
+    """
+    from datetime import UTC, datetime
+
+    from tender_intelligence.db.models.tenders import Tender
+
+    with session_factory() as session:
+        row = Tender(
+            source_id=source_id,
+            external_id=external_id,
+            url=f"{BASE_URL}/tenders/tenders/{external_id}/list",
+            title=f"Stranded tender {external_id}",
+            status="new",
+            first_seen_at=datetime(2026, 1, 1, tzinfo=UTC),
+            # correlation_id carries a unique constraint (docs/03 §3.2), so derive it from the
+            # tender id rather than reusing one literal across a multi-row fixture.
+            correlation_id=str(uuid.uuid4()),
+            is_update=False,
+        )
+        session.add(row)
+        session.commit()
+        return int(row.id)
+
+
+def _detail_ids_fetched(site: OfflineSite) -> set[str]:
+    """The tender ids whose detail pages this run actually requested.
+
+    The listing URL itself (``/tenders/tenders/list``) shares the ``/list`` suffix, so it is
+    excluded explicitly — otherwise it reads as a tender whose id is the literal ``"list"``.
+    """
+    found = set()
+    for url in site.requests:
+        if not url.startswith(f"{BASE_URL}/tenders/tenders/"):
+            continue
+        tail = url[len(f"{BASE_URL}/tenders/tenders/") :]
+        if not tail.endswith("/list") or "/" not in tail:
+            continue  # the bare listing URL, not a per-tender detail page
+        found.add(tail.split("/")[0])
+    return found
+
+
+def _recovery_harness(session_factory, tmp_path, site: OfflineSite, **overrides):
+    harness = build_harness(
+        session_factory,
+        tmp_path,
+        site=site,
+        ocr=StubOcrEngine(),
+        coordinator_overrides={"unprocessed_recovery_limit": 25, **overrides},
+    )
+    return harness
+
+
+def test_unprocessed_tender_is_re_driven_instead_of_being_swallowed_as_unchanged(
+    session_factory_gr, tmp_path
+) -> None:
+    """A persisted-but-unverdicted tender must not be lost to the ``UNCHANGED`` exclusion.
+
+    Without the recovery edge, stage 05 reports the listing as unchanged, the work set comes
+    back empty and the tender is never triaged, verdicted or notified again — the permanent
+    silence reported against the WAHO source.
+    """
+    site = _recovery_site("900")
+    harness = _recovery_harness(session_factory_gr, tmp_path, site)
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+
+    stranded_id = _strand_one_tender(session_factory_gr, source_id, "900")
+    site.requests.clear()
+
+    report = harness.coordinator.run_source(source_id)
+
+    # The stranded tender's detail page is actually fetched — it was not swallowed.
+    assert "900" in _detail_ids_fetched(site), "the stranded tender's detail page was never fetched"
+
+    # And it is carried all the way through acquisition, not just touched.
+    assert _documents(session_factory_gr, stranded_id), (
+        "the recovered tender must reach acquisition and produce document rows"
+    )
+    assert report.stage(StageNumber.DETAIL).status is StageStatus.COMPLETED, report.stage_map()
+
+    with session_factory_gr() as session:
+        assert session.get(Tender, stranded_id) is not None
+
+
+def test_recovery_does_not_change_what_dedup_reported(session_factory_gr, tmp_path) -> None:
+    """Recovery adds work; it must not reclassify a listing or rewrite dedup's tallies.
+
+    ``compare`` still finds the stranded listing identical, so ``new``/``update``/
+    ``unchanged`` counts stay exactly what dedup decided (docs/04 §4.14). Recovery is a work-set
+    decision made *after* dedup, not a second opinion about materiality.
+    """
+    site = _recovery_site("900")
+    harness = _recovery_harness(session_factory_gr, tmp_path, site)
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+    _strand_one_tender(session_factory_gr, source_id, "900")
+
+    site.requests.clear()
+    harness.coordinator.run_source(source_id)
+
+    # The listing advertises three ids; the stranded row adds none to those tallies. Dedup's
+    # own counts live on the RunHistory row (docs/04 §4.8), so that is where they are read.
+    run = _run_rows(session_factory_gr, source_id)[-1]
+    assert run.listings_found == 3
+    assert run.new_count == 3
+    assert run.update_count == 0
+    assert run.unchanged_count == 0
+
+
+def test_recovery_leaves_verdict_failed_and_processed_tenders_alone(
+    session_factory_gr, tmp_path
+) -> None:
+    """Only ``new`` is recovered.
+
+    ``processed`` already has its verdict, and ``verdict_failed`` is terminal by explicit
+    decision (docs/13-open-decisions.md O21). Re-driving either would contradict that decision
+    and re-send mail for a tender the business already saw.
+    """
+    from datetime import UTC, datetime
+
+    site = _recovery_site("950", "951")
+    harness = _recovery_harness(session_factory_gr, tmp_path, site)
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+
+    with session_factory_gr() as session:
+        for index, status in enumerate(("processed", "verdict_failed")):
+            session.add(
+                Tender(
+                    source_id=source_id,
+                    external_id=f"95{index}",
+                    url=f"{BASE_URL}/tenders/tenders/95{index}/list",
+                    title=f"Terminal tender {status}",
+                    status=status,
+                    first_seen_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    correlation_id=str(uuid.uuid4()),
+                    is_update=False,
+                )
+            )
+        session.commit()
+
+    site.requests.clear()
+    harness.coordinator.run_source(source_id)
+
+    fetched = _detail_ids_fetched(site)
+    assert not fetched & {"950", "951"}, (
+        f"terminal tenders must not be re-fetched; fetched={sorted(fetched)}"
+    )
+
+
+def test_recovery_is_bounded_by_its_limit(session_factory_gr, tmp_path) -> None:
+    """One run re-drives at most ``unprocessed_recovery_limit`` stranded tenders.
+
+    The cap is what stops a large backlog turning into one oversized crawl. Note this harness
+    wires no verdict stage, so a recovered tender stays at ``new`` and is legitimately eligible
+    again next run — that is the same ambiguity documented in O25, not a re-drive bug. Draining
+    over several runs is therefore asserted only on the *cap*, not on non-repetition.
+    """
+    site = _recovery_site(*(f"8{index:02d}" for index in range(5)))
+    harness = _recovery_harness(
+        session_factory_gr, tmp_path, site, unprocessed_recovery_limit=2
+    )
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+    for index in range(5):
+        _strand_one_tender(session_factory_gr, source_id, f"8{index:02d}")
+
+    for attempt in (1, 2):
+        site.requests.clear()
+        harness.coordinator.run_source(source_id)
+        recovered = _detail_ids_fetched(site) - set(LISTING_EXTERNAL_IDS)
+        assert len(recovered) == 2, (
+            f"run {attempt}: recovery must honour its cap; fetched={sorted(recovered)}"
+        )
+
+
+def test_recovery_drains_the_oldest_backlog_first(session_factory_gr, tmp_path) -> None:
+    """Ordering is oldest-first, so a bounded recovery works through the backlog predictably."""
+    from datetime import UTC, datetime, timedelta
+
+    from tender_intelligence.db.models.tenders import Tender
+
+    site = _recovery_site("810", "811", "812")
+    harness = _recovery_harness(
+        session_factory_gr, tmp_path, site, unprocessed_recovery_limit=2
+    )
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    oldest_first = ("810", "811", "812")
+    with session_factory_gr() as session:
+        # Insert in reverse age order, so the newest tender gets the lowest id. Id order and age
+        # order therefore disagree completely, and only an age-based sort can pick 810/811.
+        for ext in reversed(oldest_first):
+            session.add(
+                Tender(
+                    source_id=source_id,
+                    external_id=ext,
+                    url=f"{BASE_URL}/tenders/tenders/{ext}/list",
+                    title=f"Backlog tender {ext}",
+                    status="new",
+                    first_seen_at=base + timedelta(days=oldest_first.index(ext)),
+                    correlation_id=str(uuid.uuid4()),
+                    is_update=False,
+                )
+            )
+        session.commit()
+
+    site.requests.clear()
+    harness.coordinator.run_source(source_id)
+
+    recovered = _detail_ids_fetched(site) - set(LISTING_EXTERNAL_IDS)
+    assert recovered == {"810", "811"}, (
+        f"recovery must take the oldest first; fetched={sorted(recovered)}"
+    )
+
+
+def test_recovery_is_off_by_default(session_factory_gr, tmp_path) -> None:
+    """Default off: a pipeline without Stage B must not re-drive finished work every run.
+
+    This is the §13 guard. With no verdict stage configured a fully processed tender stays at
+    ``new`` forever, so an always-on recovery would re-fetch it on every single run — the exact
+    waste §13 exists to prevent. Recovery therefore requires an explicit positive limit.
+    """
+    site = _recovery_site("900")
+    harness = build_harness(session_factory_gr, tmp_path, site=site, ocr=StubOcrEngine())
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+    _strand_one_tender(session_factory_gr, source_id, "900")
+
+    site.requests.clear()
+    harness.coordinator.run_source(source_id)
+
+    assert "900" not in _detail_ids_fetched(site), (
+        "recovery is opt-in; the stranded tender must not be re-driven by default"
+    )
+
+
+def test_recovery_is_scoped_to_its_own_source(session_factory_gr, tmp_path) -> None:
+    """One source's backlog must never be driven by another source's run."""
+    site = _recovery_site("900")
+    harness = _recovery_harness(session_factory_gr, tmp_path, site)
+    first = harness.seed_source(name="wahoo")
+    second = harness.seed_source(name="wahoo-two")
+    harness.ensure_settings()
+    _strand_one_tender(session_factory_gr, second, "900")
+
+    site.requests.clear()
+    harness.coordinator.run_source(first)
+
+    assert "900" not in _detail_ids_fetched(site), (
+        "a tender belonging to another source must not be recovered by this run"
+    )
 
 
 # --------------------------------------------------------------------------- §19 L

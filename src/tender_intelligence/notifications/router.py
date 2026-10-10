@@ -113,6 +113,24 @@ class RecipientRouter:
             selected.append(recipient)
         return self._selection(selected, list_type="dev_alert")
 
+    def resolve_raw_notice(self) -> RecipientSelection:
+        """Resolve the dev recipients for a verdict-unavailable raw notice (v1.1 §5.6).
+
+        A raw notice is a **system-health signal, not a business notification**, so it goes to
+        the dev alert list only — unconditionally, regardless of Test Mode. Two reasons:
+
+        * It has no recommendation, so ``receives_filter`` (``all``/``apply``/``urgent``) cannot
+          be evaluated. Applying it anyway would drop the notice for most configured
+          recipients, which is the silent failure this notice exists to prevent.
+        * The business list receives tender assessments. An unassessable tender is not an
+          assessment, and mailing business recipients a notice with no verdict would look like
+          a deliverable the system never produced.
+
+        Business recipients are told about a failed assessment through the dev-alert path and
+        the run's timeline rather than through an incomplete business email.
+        """
+        return self._selection(self._active(list_type="dev_alert"), list_type="dev_alert")
+
     def _selection(
         self,
         recipients: list[Recipient],

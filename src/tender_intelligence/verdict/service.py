@@ -28,6 +28,7 @@ from tender_intelligence.db.models.tenders import Tender
 from tender_intelligence.db.models.triage import TriageResult
 from tender_intelligence.db.models.verdicts import Verdict
 from tender_intelligence.interfaces.llm import LLMClient, LLMError, LLMMessage
+from tender_intelligence.processing.notice import NOTICE_FILENAME, is_notice
 from tender_intelligence.processing.store import ExtractionStore
 from tender_intelligence.storage.interface import ObjectStorage
 from tender_intelligence.verdict.retrieval import retrieve_relevant_evidence
@@ -38,6 +39,30 @@ PROMPT_VERSION = "stage-b.v1"
 ROLE = "verdict"
 DOCUMENT_MAP_MAX_BYTES = 48_000
 DOCUMENT_MAP_CHUNK_CHARS = 4_000
+
+#: Confidence removed when the assessment rests on the tender's published notice rather than on a
+#: downloaded tender document.
+#:
+#: A notice is the procuring entity's own summary. It carries the scope and often the headline
+#: requirements, but the eligibility, qualification and scoring criteria that decide an
+#: application usually live in the annexes — which is exactly what a paywalled portal withholds.
+#: So the model is reading a partial record while being asked for a number, and the number has to
+#: carry that. Applied deterministically in :func:`_apply_authoritative_overrides` rather than
+#: asked for in the prompt: a penalty the model can decline to apply is not a penalty.
+#:
+#: Sized at 0.25 — large enough that a notice-only assessment can never read as a
+#: document-grounded one, small enough to leave a clearly-supported verdict usable. It is a floor
+#: on the honesty of the number, not a substitute for reading the assessment itself.
+NOTICE_ONLY_CONFIDENCE_PENALTY = 0.25
+
+#: Recorded in ``limitations`` (and rendered in the notification) whenever the assessment came from
+#: the notice alone. Fixed text rather than model prose so the reader is told the same thing every
+#: time, in the words that matter.
+NOTICE_ONLY_LIMITATION = (
+    "No Downloadable source files: this assessment is based only on the tender's published "
+    "notice. The tender document was not available for download, so eligibility, qualification "
+    "and scoring criteria stated only in the document have not been assessed."
+)
 TRANSIENT_ERRORS = {
     "ai_call_timeout",
     "timeout",
@@ -177,6 +202,11 @@ class VerdictOutcome:
     error_code: str | None = None
     automatic_assessment_unavailable: bool = False
     incomplete_inputs: bool = False
+    #: True when the assessment rested on the tender's published notice rather than on a
+    #: downloaded document. Carried out of the engine (rather than stored on the verdict row)
+    #: because it is a fact about the *inputs*, read off the bundle — not a conclusion the
+    #: model produced, and so not something a report should take on trust.
+    notice_only: bool = False
     correlation_id: str | None = None
     run_id: int | None = None
 
@@ -197,6 +227,11 @@ class VerdictContent:
     incomplete_warning: str | None
     incomplete_inputs: bool
     assessment_unavailable: bool
+    #: True when the assessment rested on the tender's published notice because no downloadable
+    #: document was offered. Mirrors :attr:`VerdictOutcome.notice_only` so a consumer does not
+    #: have to hold both objects to tell "assessed from a summary" apart from "a file was
+    #: missing", which are different facts with different consequences for the reader.
+    notice_only: bool = False
 
 
 ClientFactory = Callable[[LLMProfile], LLMClient]
@@ -311,17 +346,40 @@ class VerdictEngine:
             ).one_or_none()
         )
         deadline = _deadline_context(deadline_row)
+        # Documents whose extraction produced nothing are kept in the request. Dropping
+        # them hid the fact that the tender could not be fully read: the model could
+        # not name a missing annex, so its limitations stayed generic and the verdict
+        # read as though nothing were missing. An unreadable document carries an empty
+        # content list and its failure status, so it costs a few dozen tokens, cannot be
+        # mistaken for citable content, and _reduce_documents_for_budget still trims it
+        # to an identity record if the budget is tight.
         docs = _bundle_documents(bundle)
-        source_docs = docs
-        if not any(document.get("content") for document in source_docs):
+        if not any(document.get("content") for document in docs):
             return self._failure(
                 tender, "requirement_sources_unavailable", incomplete_inputs=incomplete
             )
-        # Drop documents with no extracted content before any LLM calls.
-        # For this tender, 15/16 docs had empty content — sending skeleton metadata
-        # for them wastes thousands of tokens with zero informational value.
-        # source_docs is kept unfiltered for the unavailable_documents counter.
-        docs = [doc for doc in docs if doc.get("content")]
+        # Whether the only thing we can cite is the tender's published notice. Drives the
+        # confidence penalty, the limitation text and the prompt's instruction to treat the
+        # record as partial.
+        notice_only = _assessed_from_notice_only(docs)
+        if notice_only:
+            log.info(
+                "Stage B assessing from the tender notice alone; no downloaded document",
+                extra={
+                    "stage": "verdict",
+                    "status": "notice_only_assessment",
+                    "tender_id": tender.id,
+                    "correlation_id": tender.correlation_id,
+                    "extra": {
+                        "confidence_penalty": NOTICE_ONLY_CONFIDENCE_PENALTY,
+                        "document_count": len(docs),
+                    },
+                },
+            )
+        # Snapshot of the bundle as discovered, kept so the context report can state
+        # what the request cost before reduction. Reduction rebinds ``docs`` to new
+        # lists, so this stays the pre-reduction size.
+        unreduced_docs = list(docs)
         # The entire KB is retained in the reduce request. If it alone cannot fit, fail safely.
         kb_tokens = max(kb_version.token_count, _estimate_tokens(kb))
         warning_share = (
@@ -415,14 +473,11 @@ class VerdictEngine:
                     },
                 },
             )
-            # Capture validation error details for better retry guidance
-            validation_error_msg = None
-            try:
-                _validate_requirement_sources(extraction, docs)
-            except (ValueError, TypeError) as ve:
-                validation_error_msg = str(ve)
-                raise
-            
+            # The exception already contains the schema or source-evidence failure.
+            # Feed it to the one permitted correction attempt without exposing content
+            # in logs.
+            validation_error_msg = str(exc)
+
             retry_messages = extraction_messages + [
                 LLMMessage(role="assistant", content=extracted_response.content),
                 LLMMessage(
@@ -431,9 +486,12 @@ class VerdictEngine:
                         "Correct the requirement extraction based on these validation errors:\n\n"
                         f"{validation_error_msg}\n\n"
                         "Rules:\n"
-                        "- Each 'location' must be exactly ONE value from the document's valid locations\n"
-                        "- Never combine locations with commas (e.g., 'section:23, 24' is invalid)\n"
-                        "- Quotes must be contiguous text - never use ellipses (...) or (…)\n"
+                        "- Each 'location' must be exactly ONE value from the document's "
+                        "valid locations\n"
+                        "- Never combine locations with commas (e.g., 'section:23, 24' "
+                        "is invalid)\n"
+                        "- Quotes must be contiguous text - never use ellipses (...) "
+                        "or (…)\n"
                         "- Each quote must exist verbatim in the source document\n\n"
                         "Return corrected JSON only."
                     ),
@@ -577,7 +635,7 @@ class VerdictEngine:
         context_report["final_request_tokens"] = _messages_tokens(messages)
         context_report["original_request_bytes"] = sum(
             len(message.content.encode("utf-8")) for message in _verdict_messages(
-                tender, source_docs, selected_kb, kb_version.id, deadline,
+                tender, unreduced_docs, selected_kb, kb_version.id, deadline,
                 incomplete, material_requirements, triage=triage,
             )
         )
@@ -592,7 +650,7 @@ class VerdictEngine:
         context_report["input_budget_tokens"] = budget["input_budget"]
         context_report["represented_documents"] = len(docs)
         context_report["unavailable_documents"] = sum(
-            1 for doc in source_docs
+            1 for doc in docs
             if doc.get("extraction_status") != "extracted" or not doc.get("content")
         )
         log.info(
@@ -685,7 +743,9 @@ class VerdictEngine:
             # Strip markdown fences if present (e.g., ```json ... ```)
             content = _strip_markdown_fences(result.content)
             payload = VerdictPayload.model_validate(_normalize_verdict_json(content))
-            payload = _apply_authoritative_overrides(payload, material_requirements, deadline, kb)
+            payload = _apply_authoritative_overrides(
+                payload, material_requirements, deadline, kb, notice_only=notice_only
+            )
             _validate_semantics(
                 payload,
                 docs,
@@ -709,7 +769,7 @@ class VerdictEngine:
                 error_details = "\n".join(error_lines)
             else:
                 error_details = f"  - {str(first_error)}"
-            
+
             # Exactly one validation retry. The response itself is deliberately not logged.
             retry_messages = messages + [
                 LLMMessage(role="assistant", content=result.content),
@@ -719,11 +779,14 @@ class VerdictEngine:
                         "The output has validation errors:\n"
                         f"{error_details}\n\n"
                         "CRITICAL CORRECTIONS REQUIRED:\n"
-                        "1. status field: MUST be exactly \"met\", \"not_met\", \"partially_met\", or \"unverified\"\n"
+                        "1. status field: MUST be exactly \"met\", \"not_met\", "
+                        "\"partially_met\", or \"unverified\"\n"
                         "   - NEVER use \"verified\", \"failed\", \"partial\"\n"
-                        "2. company_evidence: MUST use {\"section\": \"...\", \"quote\": \"...\"}\n"
+                        "2. company_evidence: MUST use {\"section\": \"...\", "
+                        "\"quote\": \"...\"}\n"
                         "   - Use \"section\" (NOT \"location\")\n"
-                        "   - section must be an exact KB heading that exists in the provided evidence\n"
+                        "   - section must be an exact KB heading that exists in the "
+                        "provided evidence\n"
                         "   - Use [] if no KB evidence\n"
                         "3. If status=\"unverified\", company_evidence MUST be []\n"
                         "4. If status=\"met\", company_evidence MUST NOT be empty\n"
@@ -742,7 +805,13 @@ class VerdictEngine:
                 # Strip markdown fences if present (e.g., ```json ... ```)
                 content = _strip_markdown_fences(result.content)
                 payload = VerdictPayload.model_validate(_normalize_verdict_json(content))
-                payload = _apply_authoritative_overrides(payload, material_requirements, deadline, kb)
+                payload = _apply_authoritative_overrides(
+                    payload,
+                    material_requirements,
+                    deadline,
+                    kb,
+                    notice_only=notice_only,
+                )
                 _validate_semantics(
                     payload,
                     docs,
@@ -820,6 +889,7 @@ class VerdictEngine:
             OutcomeStatus.AVAILABLE,
             record.id,
             incomplete_inputs=incomplete,
+            notice_only=notice_only,
             correlation_id=tender.correlation_id,
             run_id=self.run_id,
         )
@@ -1573,24 +1643,24 @@ def _truncate_overlong_quotes(
     """
     Safety net: if a quote is a valid substring but exceeds max_length, truncate it
     to max_length. A prefix of a verbatim quote is still verbatim/findable.
-    
+
     This avoids depending on model compliance for something we can fix deterministically.
     """
     normalized_segment = _normalize_text(segment_text)
     truncated_evidence = []
-    
+
     for ev in mapped.evidence:
         quote = ev.quote
         normalized_quote = _normalize_text(quote)
-        
+
         # If quote is valid but overlong, truncate to max_length
         if len(quote) > max_quote_length and normalized_quote in normalized_segment:
             quote = quote[:max_quote_length]
-        
+
         truncated_evidence.append(
             DocumentMapEvidence(location=ev.location, quote=quote)
         )
-    
+
     return DocumentMapResult(
         summary=mapped.summary,
         evidence=truncated_evidence
@@ -1606,11 +1676,11 @@ def _strip_markdown_fences(content: str) -> str:
         first_newline = content.find("\n")
         if first_newline != -1:
             content = content[first_newline + 1:]  # Skip opening fence line
-    
+
     if content.endswith("```"):
         # Remove closing fence
         content = content[:-3].rstrip()
-    
+
     return content
 
 
@@ -1710,10 +1780,27 @@ def _bundle_documents(bundle):
                 "checksum": extraction.checksum,
                 "mime_type": extraction.mime_type,
                 "error_code": extraction.error_code,
+                # Stated per document rather than inferred at the verdict level, so the model
+                # can see *which* input it is reading and the confidence penalty is applied from
+                # the same fact rather than from a filename convention.
+                "notice_only": is_notice(extraction),
                 "content": chunks,
             }
         )
     return docs
+
+
+def _assessed_from_notice_only(docs: list[dict[str, Any]]) -> bool:
+    """Whether every citable source in *docs* is the tender's notice rather than a file.
+
+    ``content`` is what makes a document citable — Stage B's own gate is
+    ``any(document.get("content") ...)`` — so a document that contributes no content cannot make
+    this false. Tenders whose real files downloaded but yielded nothing therefore keep their
+    existing "inputs were unavailable" treatment: that is a failure to read the tender, which is
+    a different thing from never being offered the tender.
+    """
+    citable = [document for document in docs if document.get("content")]
+    return bool(citable) and all(document.get("notice_only") for document in citable)
 
 
 def _deadline_context(row):
@@ -1775,7 +1862,7 @@ def _requirement_messages(
             }
         ]
     }
-    
+
     return [
         LLMMessage(
             role="system",
@@ -1792,8 +1879,9 @@ def _requirement_messages(
                 "- Each 'quote' must be CONTIGUOUS text from the source - NO ellipses (...) or (…)\n"
                 "- Quotes must exist verbatim in the source document at the cited location\n"
                 "- Do not invent requirements, locations, or paraphrase quotes\n"
-                "- Do not cite content listed as omitted in the supplied context manifest\n\n"
-                "Output only valid JSON - no markdown fences, no explanations."
+                "- Do not cite content listed as omitted in the supplied context manifest\n"
+                + _notice_only_extraction_rule(docs)
+                + "\nOutput only valid JSON - no markdown fences, no explanations."
             ),
         ),
         LLMMessage(
@@ -1811,6 +1899,27 @@ def _requirement_messages(
             ),
         ),
     ]
+
+
+def _notice_only_extraction_rule(docs) -> str:
+    """Extraction-stage instruction for a tender whose only input is its published notice.
+
+    A notice states fewer requirements than the tender document does, and the criteria it omits
+    are unknowable from it. The risk is a model that treats a short notice as a short tender and
+    reports three requirements as though that were the whole set — so the instruction is to
+    extract what the notice actually states, cite it, and stop, rather than inferring the rest.
+    """
+    if not _assessed_from_notice_only(docs):
+        return ""
+    return (
+        "\n**THIS TENDER HAS NO DOWNLOADABLE DOCUMENTS:**\n"
+        "- The only source is the tender's published notice (filename '"
+        f"{NOTICE_FILENAME}'). Assess nothing beyond it\n"
+        "- Extract ONLY requirements the notice actually states; never infer requirements a "
+        "tender document would normally contain\n"
+        "- A notice is a summary: treat every requirement you cannot find stated in it as "
+        "absent, not as met\n"
+    )
 
 
 def _fit_requirement_context(docs, profile, tender):
@@ -1921,7 +2030,7 @@ def _validate_requirement_sources(extraction: RequirementExtraction, source_docs
             # Handle comma-separated locations (e.g., "section:23, 24")
             # Split and try each location part individually
             evidence_locations = [loc.strip() for loc in evidence.location.split(',')]
-            
+
             for document_id, location, text in valid_refs:
                 if document_id != evidence.document_id:
                     continue
@@ -1937,7 +2046,7 @@ def _validate_requirement_sources(extraction: RequirementExtraction, source_docs
                 norm_quote = _normalize_text(evidence.quote)
                 norm_chunk = _normalize_text(text)
                 norm_doc = _normalize_text(doc_full_text.get(document_id, ""))
-                
+
                 # Standard match attempts
                 if (
                     evidence.quote in text
@@ -1946,12 +2055,12 @@ def _validate_requirement_sources(extraction: RequirementExtraction, source_docs
                 ):
                     matched = True
                     break
-                
+
                 # Level 4: Handle ellipses - split on ... or … and verify fragments in order
                 import re as _re
                 fragments = [
-                    f.strip() 
-                    for f in _re.split(r'\.{3,}|…', evidence.quote) 
+                    f.strip()
+                    for f in _re.split(r'\.{3,}|…', evidence.quote)
                     if len(f.strip()) > 15  # Only check substantial fragments
                 ]
                 if fragments and norm_doc:
@@ -1969,11 +2078,11 @@ def _validate_requirement_sources(extraction: RequirementExtraction, source_docs
                     if all_found and fragments:
                         matched = True
                         break
-            
+
             if not matched:
                 # Build detailed error message for retry
                 available_locs = sorted({
-                    loc for doc_id, loc, _ in valid_refs 
+                    loc for doc_id, loc, _ in valid_refs
                     if doc_id == evidence.document_id
                 })
                 error_details = (
@@ -1982,11 +2091,11 @@ def _validate_requirement_sources(extraction: RequirementExtraction, source_docs
                     f"  - location: {evidence.location}\n"
                 )
                 if ',' in evidence.location:
-                    error_details += f"  ❌ Location contains comma. Use single location only.\n"
+                    error_details += "  ❌ Location contains comma. Use single location only.\n"
                 if not any(loc in evidence_locations for loc in available_locs):
                     error_details += f"  ❌ Location not found. Valid locations: {', '.join(available_locs[:10])}\n"
                 if '...' in evidence.quote or '…' in evidence.quote:
-                    error_details += f"  ⚠️ Quote contains ellipses - use contiguous text only.\n"
+                    error_details += "  ⚠️ Quote contains ellipses - use contiguous text only.\n"
                 error_details += f"  - quote preview: {evidence.quote[:150]}\n"
                 raise ValueError(error_details)
 
@@ -2021,7 +2130,22 @@ def _normalize_verdict_json(content: str) -> dict[str, Any]:
     return data
 
 
-def _apply_authoritative_overrides(payload, material_requirements, deadline, kb_text=""):
+def _is_placeholder(text: str) -> bool:
+    """True when a model field holds template filler rather than real content.
+
+    Models echo the schema's angle-bracket placeholders (``<one sentence summary...>``)
+    or a bare dash. Those carry no information and must never reach a human.
+    """
+
+    candidate = text.strip()
+    if not candidate or candidate in {"-", "--", "n/a", "N/A", "none", "null", "..."}:
+        return True
+    return candidate.startswith("<") and candidate.endswith(">")
+
+
+def _apply_authoritative_overrides(
+    payload, material_requirements, deadline, kb_text="", *, notice_only: bool = False
+):
     """Inject authoritative values that must not deviate from independently extracted data.
 
     Small models paraphrase requirements, forget deadline fields, leave placeholder
@@ -2029,21 +2153,42 @@ def _apply_authoritative_overrides(payload, material_requirements, deadline, kb_
     function corrects all of these after parsing, before validation.
     """
     req_strings = [r.requirement for r in material_requirements]
-    
-    # Get valid KB headings for citation validation
-    kb_headings = {
-        line.lstrip("# ").strip() 
-        for line in kb_text.splitlines() 
-        if line.startswith("#")
-    }
+
+    # Canonicalise the KB headings the prompt exposes, keyed by a comparison form.
+    # The model is shown headings rendered as "# Heading" and is told to cite the
+    # heading it sees, so it may echo the leading "#" or vary the case. Compare on a
+    # normalised form and store the canonical heading verbatim, so a compliant
+    # citation is never discarded and the persisted value still matches the KB.
+    kb_headings: dict[str, str] = {}
+    for line in kb_text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            continue
+        canonical = stripped.lstrip("#").strip()
+        if canonical:
+            kb_headings.setdefault(canonical.casefold(), canonical)
 
     # Fix assessments: align requirement strings, normalize status, fix company_evidence keys,
     # and validate KB citations
+    #
+    # Bind each assessment to its authoritative requirement by matching the requirement
+    # text first. Positional binding is only safe when the model returned exactly one
+    # assessment per requirement; if it dropped or merged some, positional binding would
+    # silently move requirement A's evidence onto requirement B.
+    by_text = {text.strip().casefold(): text for text in req_strings}
+    positional_is_safe = len(payload.assessments) == len(req_strings)
     fixed_assessments = []
     for i, assessment in enumerate(payload.assessments):
-        # Map to authoritative requirement string by position (model keeps order)
-        authoritative_req = req_strings[i] if i < len(req_strings) else assessment.requirement
-        
+        matched = by_text.get((assessment.requirement or "").strip().casefold())
+        if matched is not None:
+            authoritative_req = matched
+        elif positional_is_safe:
+            authoritative_req = req_strings[i]
+        else:
+            # No text match and the counts disagree: keep the model's own wording
+            # rather than binding this evidence to an unrelated requirement.
+            authoritative_req = assessment.requirement
+
         # Normalize status values
         status = assessment.status
         status_map = {
@@ -2053,40 +2198,43 @@ def _apply_authoritative_overrides(payload, material_requirements, deadline, kb_
             "failed": "not_met",
         }
         status = status_map.get(status, status)
-        
+
         # Fix company_evidence: rename 'location' to 'section' if present
         fixed_company_evidence = []
         for citation in assessment.company_evidence:
             citation_dict = citation.model_dump() if hasattr(citation, "model_dump") else citation
-            
+
             # Rename location→section
             if "location" in citation_dict and "section" not in citation_dict:
                 citation_dict["section"] = citation_dict.pop("location")
-            
+
             # Drop citation if section isn't a real KB heading
-            section = citation_dict.get("section", "")
-            if section not in kb_headings:
+            cited = str(citation_dict.get("section", "")).strip().lstrip("#").strip().casefold()
+            canonical = kb_headings.get(cited)
+            if canonical is None:
                 # Invalid KB reference - drop this citation
                 continue
-            
+            citation_dict["section"] = canonical
+
             fixed_company_evidence.append(KBCitation(**citation_dict))
-        
+
         # If we dropped all company evidence and status was met, set to unverified
         if not fixed_company_evidence and status == "met":
             status = "unverified"
-        
-        # Fix gap placeholder
-        gap = assessment.gap
-        if gap and ("<" in gap and ">" in gap):
-            gap = f"No evidence on file for this requirement."
-        elif not fixed_company_evidence and status == "unverified":
-            gap = f"No evidence on file for this requirement."
-        
-        # Fix assessment text
-        assessment_text = assessment.assessment
-        if not fixed_company_evidence and status == "unverified":
-            assessment_text = f"No evidence on file for this requirement."
-        
+
+        # Fix gap placeholder.
+        # Only replace text that is genuinely absent or is a template placeholder.
+        # A model that explains *why* a requirement is unverified has said something
+        # useful; overwriting it with boilerplate throws away the only real analysis.
+        gap = (assessment.gap or "").strip()
+        if not gap or _is_placeholder(gap):
+            gap = "No evidence on file for this requirement."
+
+        # Fix assessment text, on the same terms.
+        assessment_text = (assessment.assessment or "").strip()
+        if not assessment_text or _is_placeholder(assessment_text):
+            assessment_text = "No evidence on file for this requirement."
+
         fixed_assessments.append(assessment.model_copy(update={
             "requirement": authoritative_req,
             "status": status,
@@ -2097,14 +2245,14 @@ def _apply_authoritative_overrides(payload, material_requirements, deadline, kb_
 
     # Fix gaps list placeholder
     gaps = payload.gaps
-    if gaps and all("<" in g and ">" in g for g in gaps):
+    if gaps and all(_is_placeholder(str(g)) for g in gaps):
         gaps = ["No evidence on file for all requirements."]
-    
+
     # Compute verdict from assessments (it's fully derivable)
     statuses = [a.status for a in fixed_assessments]
     if any(s == "not_met" for s in statuses):
         derived_verdict = "DO NOT APPLY"
-    elif all(s == "met" for s in statuses):
+    elif all(s == "met" for s in statuses) and not gaps:
         derived_verdict = "APPLY"
     else:
         derived_verdict = "APPLY WITH CONDITIONS"
@@ -2120,7 +2268,32 @@ def _apply_authoritative_overrides(payload, material_requirements, deadline, kb_
         "assessments": fixed_assessments,
         "gaps": gaps,
         "verdict": derived_verdict,
+        **_notice_only_overrides(payload, notice_only=notice_only),
     })
+
+
+def _notice_only_overrides(payload, *, notice_only: bool) -> dict[str, Any]:
+    """Corrections applied to a verdict reached from the notice text alone.
+
+    Two things, both deterministic rather than requested of the model:
+
+    * the confidence penalty, because a number the model was merely *asked* to discount is a
+      number it can decline to discount; and
+    * the "No Downloadable source files" limitation, because the reader of the email has to be
+      told the assessment rests on a summary whatever the model chose to write.
+
+    The limitation is prepended rather than appended so the caveat is the first thing read, and
+    it is never duplicated if the model already said something equivalent.
+    """
+    if not notice_only:
+        return {}
+    limitations = [str(item) for item in payload.limitations if str(item).strip()]
+    if not any("no downloadable source files" in item.casefold() for item in limitations):
+        limitations.insert(0, NOTICE_ONLY_LIMITATION)
+    return {
+        "confidence": max(0.0, round(payload.confidence - NOTICE_ONLY_CONFIDENCE_PENALTY, 4)),
+        "limitations": limitations,
+    }
 
 
 def _verdict_messages(
@@ -2145,7 +2318,7 @@ def _verdict_messages(
                 "tender_evidence": [e.model_dump() for e in r.tender_evidence],
                 "company_evidence": [
                     {
-                        "section": "# Exact KB heading from provided evidence",
+                        "section": "Exact KB heading from provided evidence, without the leading #",
                         "quote": "Verbatim text found under that heading"
                     }
                 ],
@@ -2196,7 +2369,8 @@ def _verdict_messages(
         "- An empty KB means no evidence on file; it does NOT mean the company fails\n"
         "- Missing attachments do NOT become failed requirements\n"
         "- Use only supplied content — do NOT fabricate evidence\n"
-        "\n"
+        + _notice_only_verdict_rule(docs)
+        + "\n"
         "EXAMPLE OF ONE VALID ASSESSMENT:\n"
         "{\n"
         "  \"requirement\": \"Minimum 3 years experience in project management\",\n"
@@ -2250,6 +2424,30 @@ def _verdict_messages(
         LLMMessage("system", system),
         LLMMessage("user", json.dumps(content, ensure_ascii=False)),
     ]
+
+
+def _notice_only_verdict_rule(docs) -> str:
+    """Verdict-stage instruction for a notice-only assessment.
+
+    Two things the model must not do when the tender document was never available: present the
+    notice as the tender's complete requirements, and report a confidence that looks like it came
+    from a document. The confidence penalty itself is applied in code — asking the model to
+    discount itself is not a control — but the *reasoning* it writes has to acknowledge the gap,
+    and this is what asks for that.
+    """
+    if not _assessed_from_notice_only(docs):
+        return ""
+    return (
+        "\n**THIS TENDER HAD NO DOWNLOADABLE DOCUMENTS:**\n"
+        f"- The only evidence is the tender's published notice ('{NOTICE_FILENAME}')\n"
+        "- The notice is a summary published by the procuring entity. Eligibility, qualification "
+        "and scoring criteria are usually in the tender document and are therefore NOT available "
+        "to you. Say so in 'limitations'\n"
+        "- Never present the notice's requirements as the tender's complete requirement set\n"
+        "- Never cite a document, annex or page you were not given\n"
+        "- Any requirement the notice does not state is unknown — do not mark it met\n"
+        "- 'confidence' is reduced automatically; do not inflate it to compensate\n"
+    )
 
 
 def _validate_semantics(
@@ -2620,6 +2818,23 @@ def _provider(profile: LLMProfile) -> str:
     return urlparse(profile.base_url).hostname or "configured-provider"
 
 
+#: The generic caveat when inputs were incomplete for a reason other than the notice fallback.
+INCOMPLETE_INPUTS_WARNING = "Some tender inputs were unavailable; assessment may be incomplete."
+
+
+def _incomplete_warning(incomplete: bool, notice_only: bool) -> str | None:
+    """The caveat shown to a reader about how complete this assessment is.
+
+    The notice-only case names the specific thing that was missing, rather than the generic
+    "some inputs were unavailable". A reader who knows the tender document was never downloaded
+    can act on that — check the portal, look for an annex, decide whether to bid blind — which
+    "some inputs were unavailable" gives them no way to do.
+    """
+    if notice_only:
+        return NOTICE_ONLY_LIMITATION
+    return INCOMPLETE_INPUTS_WARNING if incomplete else None
+
+
 def format_verdict(verdict: Verdict | None, outcome: VerdictOutcome) -> VerdictContent:
     if verdict is None or outcome.status is not OutcomeStatus.AVAILABLE:
         return VerdictContent(
@@ -2632,11 +2847,10 @@ def format_verdict(verdict: Verdict | None, outcome: VerdictOutcome) -> VerdictC
             None,
             None,
             False,
-            "Some tender inputs were unavailable; assessment may be incomplete."
-            if outcome.incomplete_inputs
-            else None,
+            _incomplete_warning(outcome.incomplete_inputs, outcome.notice_only),
             outcome.incomplete_inputs,
             outcome.status is not OutcomeStatus.AVAILABLE,
+            outcome.notice_only,
         )
     assessments = verdict.requirements_summary or []
     applicability = "\n".join(
@@ -2664,9 +2878,8 @@ def format_verdict(verdict: Verdict | None, outcome: VerdictOutcome) -> VerdictC
         verdict.recommendation,
         verdict.confidence,
         verdict.urgency_flag,
-        "Some tender inputs were unavailable; assessment may be incomplete."
-        if verdict.incomplete_inputs
-        else None,
+        _incomplete_warning(verdict.incomplete_inputs, outcome.notice_only),
         verdict.incomplete_inputs,
         False,
+        outcome.notice_only,
     )

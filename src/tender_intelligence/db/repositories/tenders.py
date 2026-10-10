@@ -17,6 +17,7 @@ the commit boundary, and the race log (classify.compare lives in prompt 05).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -141,6 +142,70 @@ class TenderRepository(Repository):
             self.session.scalars(
                 select(Tender).where(Tender.status == status).order_by(Tender.first_seen_at)
             ).all()
+        )
+
+    def list_unprocessed(
+        self,
+        source_id: int,
+        *,
+        limit: int | None = None,
+        now: datetime | None = None,
+    ) -> list[Tender]:
+        """Tenders this source persisted, never verdicted, and still biddable.
+
+        A row still at ``status='new'`` is one dedup claimed (prompt 06 §4) whose downstream
+        run never completed — the process was interrupted, the run crashed, or a stage aborted
+        before the verdict moved it to ``processed``/``verdict_failed``. Those rows are invisible
+        to a plain crawl: ``compare`` finds the listing identical, so dedup classifies it
+        ``UNCHANGED`` and it is excluded from the work set (prompt 10 §13), which would strand
+        it permanently.
+
+        Rows whose deadline has already passed are excluded as well. Re-driving those would
+        spend an LLM call and a raw-notice email on a tender nobody can bid on — pure noise, and
+        with a large backlog enough of it to make the signal unreadable. ``deadline IS NULL`` is
+        kept: a tender with no known deadline is still worth assessing, and docs/05 §5.2 treats
+        an unresolved deadline as a gap to report rather than a reason to skip.
+
+        Ordering by ``first_seen_at`` drains the oldest backlog first, and *limit* keeps one
+        run's recovery bounded rather than re-driving an arbitrarily large backlog at once.
+        """
+        moment = now or datetime.now(UTC)
+        statement = select(Tender).where(
+            Tender.source_id == source_id,
+            Tender.status == "new",
+            (Tender.deadline.is_(None)) | (Tender.deadline > moment),
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        return list(
+            self.session.scalars(statement.order_by(Tender.first_seen_at, Tender.id)).all()
+        )
+
+    def list_expired_unprocessed(
+        self,
+        *,
+        now: datetime | None = None,
+        source_ids: Sequence[int] | None = None,
+    ) -> list[Tender]:
+        """Unprocessed tenders whose deadline has already passed — dead rows awaiting retirement.
+
+        These are the ones :meth:`list_unprocessed` deliberately skips. They are surfaced so an
+        operator action (or a maintenance sweep) can move them to the terminal ``expired`` status
+        rather than leaving them looking like pending work forever.
+        """
+        moment = now or datetime.now(UTC)
+        statement = select(Tender).where(
+            Tender.status == "new",
+            Tender.deadline.is_not(None),
+            Tender.deadline <= moment,
+        )
+        if source_ids is not None:
+            ids = [int(value) for value in source_ids]
+            if not ids:
+                return []
+            statement = statement.where(Tender.source_id.in_(ids))
+        return list(
+            self.session.scalars(statement.order_by(Tender.source_id, Tender.id)).all()
         )
 
     def get_by_correlation(self, correlation_id: str) -> Tender | None:

@@ -301,7 +301,12 @@ def test_document_map_preserves_unavailable_document_status(db_session, tmp_path
         sleeper=lambda _: None,
     ).generate(tender.id)
     assert outcome.status is OutcomeStatus.AVAILABLE
-    reduced_docs = json.loads(observed[3][1][1].content)["documents"]
+    # Call 0 is the extraction that the provider rejected, call 1 the document map, and
+    # call 2 the extraction retry built from the reduced set. The document that could
+    # not be read has no content to map, so the map must carry it through as an
+    # identity record rather than drop it: the model can only name a missing input in
+    # its limitations if the input is present in the request.
+    reduced_docs = json.loads(observed[2][1][1].content)["documents"]
     absent = next(item for item in reduced_docs if item["document_id"] == unavailable.document_id)
     assert absent["filename"] == "unavailable-annex.pdf"
     assert absent["extraction_status"] == "skipped"
@@ -570,7 +575,13 @@ def test_document_map_unexpected_nesting_has_precise_safe_diagnostic(
     _mapped, error = engine._map_documents(tender, profile, docs, "", None, {}, False)
 
     assert error == "document_map_unexpected_nesting"
-    diagnostics = [record.extra for record in caplog.records if hasattr(record, "extra")]
+    # Select the failure diagnostic by its error code. Filtering on "has an extra
+    # attribute" also matched the request-prepared record, so the assertions below ran
+    # against the wrong log entry.
+    diagnostics = [
+        record.extra for record in caplog.records
+        if getattr(record, "error_code", None) == "document_map_unexpected_nesting"
+    ]
     assert diagnostics
     issues = diagnostics[0]["validation_issues"]
     assert {tuple(issue["field_path"]) for issue in issues} == {
@@ -1126,6 +1137,45 @@ def test_independently_extracted_requirements_all_assessed(db_session, tmp_path)
         "include audited accounts",
     }
     assert client.calls == 2
+
+
+def test_gemma_style_verdict_is_repaired_offline(db_session, tmp_path) -> None:
+    """Fence-wrapped Gemma output gets safe schema/evidence repairs without retry."""
+    tender, profile, _, storage, _kb = _environment(db_session, tmp_path)
+    observed = []
+
+    class GemmaStyleClient(_ScriptedClient):
+        def chat(self, messages, *, max_tokens=None):
+            if "Extract every material" in messages[0].content:
+                return super().chat(messages, max_tokens=max_tokens)
+            self.observed.append((self.profile_id, messages, max_tokens))
+            supplied = json.loads(messages[1].content)
+            payload = _valid_payload(supplied)
+            for item in payload["assessments"]:
+                item["status"] = "verified"
+                item["company_evidence"] = [{"location": "Office", "quote": "address"}]
+            payload["verdict"] = "DO NOT APPLY"
+            return LLMResponse(
+                "```json\n" + json.dumps(payload) + "\n```",
+                self.profile_name,
+                "gemma-mock",
+                LLMUsage(3, 4, 0.01),
+            )
+
+    client = GemmaStyleClient(["EXTRACT"], observed, profile.id)
+    outcome = VerdictEngine(
+        db_session, storage, lambda _: client, sleeper=lambda _: None
+    ).generate(tender.id)
+
+    assert outcome.status is OutcomeStatus.AVAILABLE
+    assert len(observed) == 2  # extraction + successful final verdict; no retry
+    persisted = db_session.get(Verdict, outcome.verdict_id)
+    assert persisted is not None
+    assert persisted.recommendation == "APPLY WITH CONDITIONS"
+    assert all(
+        item["status"] == "unverified" and item["company_evidence"] == []
+        for item in persisted.requirements_summary
+    )
 
 
 @pytest.mark.parametrize("mode", ["missing_assessment", "orphan_assessment", "model_omission"])

@@ -73,6 +73,13 @@ class TenderDetail:
     requirements_hints: list[str] = field(default_factory=list)
     attachments: list[TenderAttachment] = field(default_factory=list)
     raw_html: str | None = None
+    #: The detail page's visible text, with markup and scripts removed.
+    #:
+    #: This is what Stage B falls back to when a portal publishes no downloadable tender
+    #: document (see :mod:`tender_intelligence.processing.notice`). It is exposed as plain text
+    #: rather than left as HTML because stripping markup is the adapter's job — the processing
+    #: layer must not know how any source structures its pages (PROJECT_RULES #10).
+    body_text: str | None = None
 
 
 class SourceError(Exception):

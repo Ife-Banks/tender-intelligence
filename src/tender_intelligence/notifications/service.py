@@ -169,7 +169,8 @@ class _UnavailableAdapter(MailProviderAdapter):
 @dataclass(frozen=True)
 class _PreparedNotification:
     tender: Tender
-    verdict: Verdict
+    #: ``None`` only for a RAW_NOTICE, which exists because no verdict was produced (v1.1 §5.6).
+    verdict: Verdict | None
     content: templates.NotificationContent
     selection: RecipientSelection
     plan: _DeliveryPlan
@@ -469,7 +470,6 @@ class NotificationService:
             tender = session.get(Tender, tender_id)
             if tender is None:
                 raise NotificationError(PERSISTENCE_NOT_FOUND, f"tender {tender_id} not found")
-            resolved_verdict = self._resolve_verdict(session, tender, verdict_id)
             test_mode, expiry_days = self._load_settings(session)
             kind = (
                 templates.NotificationKind(event.kind)
@@ -480,10 +480,19 @@ class NotificationService:
                     else templates.NotificationKind.NEW
                 )
             )
+            raw_notice = kind == templates.NotificationKind.RAW_NOTICE
+            resolved_verdict = self._resolve_verdict(
+                session, tender, verdict_id, allow_missing=raw_notice
+            )
+            if raw_notice and resolved_verdict is not None:
+                raise NotificationError(
+                    NOTIFICATION_ROUTING_FAILED,
+                    "raw notice must not carry a verdict",
+                )
             if event is not None:
                 if event.tender_id != tender.id:
                     raise NotificationError(NOTIFICATION_ROUTING_FAILED, "event/tender mismatch")
-                if event.verdict_id != resolved_verdict.id:
+                if not raw_notice and event.verdict_id != resolved_verdict.id:
                     raise NotificationError(NOTIFICATION_ROUTING_FAILED, "event/verdict mismatch")
                 if event.correlation_id and event.correlation_id != tender.correlation_id:
                     raise NotificationError(
@@ -504,12 +513,18 @@ class NotificationService:
                 linked_documents=links,
             )
             try:
-                selection = RecipientRouter(session).resolve(
-                    source_name=tender.source.name,
-                    recommendation=resolved_verdict.recommendation,
-                    urgency_flag=resolved_verdict.urgency_flag,
-                    test_mode=test_mode,
-                    source_scope=tender.source.recipient_scope,
+                router = RecipientRouter(session)
+                selection = (
+                    # Raw notice: dev list only, never the business list (v1.1 §5.6).
+                    router.resolve_raw_notice()
+                    if raw_notice
+                    else router.resolve(
+                        source_name=tender.source.name,
+                        recommendation=resolved_verdict.recommendation,
+                        urgency_flag=resolved_verdict.urgency_flag,
+                        test_mode=test_mode,
+                        source_scope=tender.source.recipient_scope,
+                    )
                 )
             except RoutingError as exc:
                 # Keep the safety boundary fail-closed.  A durable row with no recipients is
@@ -527,6 +542,7 @@ class NotificationService:
                 selection = RecipientSelection()
                 del exc
             self._assert_test_mode_safety(test_mode, selection)
+            self._assert_raw_notice_recipients(raw_notice, selection)
             dedupe_key = self._dedupe_key(tender, resolved_verdict, selection)
             attachment_metadata = self._attachment_metadata(plan.attach_pairs)
             link_metadata = self._link_metadata(plan.link_docs, links)
@@ -554,7 +570,21 @@ class NotificationService:
                 kind=kind,
             )
 
-    def _resolve_verdict(self, session: Session, tender: Tender, verdict_id: int | None) -> Verdict:
+    def _resolve_verdict(
+        self,
+        session: Session,
+        tender: Tender,
+        verdict_id: int | None,
+        *,
+        allow_missing: bool = False,
+    ) -> Verdict | None:
+        """Resolve the verdict this notification reports on, or ``None`` for a raw notice.
+
+        ``allow_missing`` is set **only** for :attr:`NotificationKind.RAW_NOTICE`, the v1.1
+        §5.6 path where Stage B produced no verdict and the tender must still be reported. Every
+        other kind still fails loudly with ``NOTIFICATION_NO_VERDICT``: silently mailing an
+        assessment with no assessment behind it would be worse than not mailing.
+        """
         if verdict_id is not None:
             verdict = session.get(Verdict, verdict_id)
             if verdict is None:
@@ -580,9 +610,11 @@ class NotificationService:
             .limit(1)
         ).first()
         if verdict is None:
+            if allow_missing:
+                return None
             raise NotificationError(
                 NOTIFICATION_NO_VERDICT,
-                f"tender {tender.id} has no verdict row; prompts 13/14 are not implemented",
+                f"tender {tender.id} has no verdict row and the event is not a raw notice",
             )
         if verdict.recommendation not in {"APPLY", "DO NOT APPLY", "APPLY WITH CONDITIONS"}:
             raise NotificationError(
@@ -603,7 +635,7 @@ class NotificationService:
         self,
         session: Session,
         tender: Tender,
-        verdict: Verdict,
+        verdict: Verdict | None,
         test_mode: bool,
         kind: templates.NotificationKind,
         event: NotificationEvent | None,
@@ -671,15 +703,24 @@ class NotificationService:
                 test_mode=test_mode,
                 source_name=tender.source.name,
                 title=tender.title,
-                urgent=verdict.urgency_flag,
-                verdict=verdict.recommendation,
-                confidence=verdict.confidence,
-                background_summary=verdict.background_summary or "",
-                requirements_summary=_as_items(verdict.requirements_summary),
-                gap_analysis=_as_items(verdict.gap_analysis),
+                # No verdict means no urgency signal and no confidence. Both are reported as
+                # absent rather than defaulted to a value, so the template cannot imply an
+                # assessment was made.
+                urgent=bool(verdict.urgency_flag) if verdict is not None else False,
+                verdict=verdict.recommendation if verdict is not None else "",
+                confidence=verdict.confidence if verdict is not None else None,
+                background_summary=(
+                    verdict.background_summary or "" if verdict is not None else ""
+                ),
+                requirements_summary=_as_items(
+                    verdict.requirements_summary if verdict is not None else ()
+                ),
+                gap_analysis=_as_items(verdict.gap_analysis if verdict is not None else ()),
                 deadline=tender.deadline,
                 deadline_timezone=tender.deadline_timezone,
-                incomplete_inputs=bool(verdict.incomplete_inputs or failed),
+                incomplete_inputs=bool(
+                    (verdict.incomplete_inputs if verdict is not None else False) or failed
+                ),
                 attached_filenames=(),
                 linked_documents=(),
                 failed_filenames=tuple(dict.fromkeys(failed)),
@@ -687,6 +728,11 @@ class NotificationService:
                 update_summary=update_summary,
                 previous_assessment_date=previous_date,
                 verdict_changed=verdict_changed,
+                assessment_unavailable=verdict is None,
+                unavailability_reason=(
+                    event.unavailability_reason if event is not None else None
+                ),
+                notice_only_assessment=_assessed_from_notice_only(verdict, pairs, failed, skipped),
             ),
             pairs,
         )
@@ -895,7 +941,7 @@ class NotificationService:
                 row = repo.create_pending(
                     dedupe_key=prepared.dedupe_key,
                     tender_id=prepared.tender.id,
-                    verdict_id=prepared.verdict.id,
+                    verdict_id=prepared.verdict.id if prepared.verdict is not None else None,
                     correlation_id=prepared.tender.correlation_id,
                     recipients_snapshot=list(prepared.selection.snapshot),
                     attachments=prepared.attachment_metadata,
@@ -960,24 +1006,35 @@ class NotificationService:
             if row is None or row.claim_token != claim_token:
                 raise PersistenceError("notification claim is no longer owned by this worker")
             tender = session.get(Tender, prepared.tender.id)
-            verdict = session.get(Verdict, prepared.verdict.id)
-            if tender is None or verdict is None:
-                raise PersistenceError("notification tender/verdict disappeared before send")
+            if tender is None:
+                raise PersistenceError("notification tender disappeared before send")
+            raw_notice = prepared.verdict is None
+            verdict: Verdict | None = None
+            if not raw_notice:
+                verdict = session.get(Verdict, prepared.verdict.id)  # type: ignore[union-attr]
+                if verdict is None:
+                    raise PersistenceError("notification verdict disappeared before send")
             test_mode, _ = self._load_settings(session)
             try:
                 # Resolve the active route again at the send boundary.  This keeps a stale
                 # reservation from sending to a removed recipient and makes mode transitions
                 # explicit; the resulting recipient set is also folded into the dedupe key below.
-                selection = RecipientRouter(session).resolve(
-                    source_name=tender.source.name,
-                    recommendation=verdict.recommendation,
-                    urgency_flag=verdict.urgency_flag,
-                    test_mode=test_mode,
-                    source_scope=tender.source.recipient_scope,
+                router = RecipientRouter(session)
+                selection = (
+                    router.resolve_raw_notice()
+                    if raw_notice
+                    else router.resolve(
+                        source_name=tender.source.name,
+                        recommendation=verdict.recommendation,  # type: ignore[union-attr]
+                        urgency_flag=verdict.urgency_flag,  # type: ignore[union-attr]
+                        test_mode=test_mode,
+                        source_scope=tender.source.recipient_scope,
+                    )
                 )
             except RoutingError:
                 return None
             self._assert_test_mode_safety(test_mode, selection)
+            self._assert_raw_notice_recipients(raw_notice, selection)
             # The reservation may have been made with a different active route (for example,
             # while Test Mode was changing).  The idempotency identity must describe the actual
             # recipients used for this send, not the stale pre-reservation snapshot.
@@ -1771,10 +1828,33 @@ class NotificationService:
             )
 
     @staticmethod
-    def _dedupe_key(tender: Tender, verdict: Verdict, selection: RecipientSelection) -> str:
+    def _assert_raw_notice_recipients(raw_notice: bool, selection: RecipientSelection) -> None:
+        """Fail closed if a raw notice somehow resolved to a business recipient.
+
+        This is checked on every send path, not only at routing, because a raw notice carries
+        no assessment and must never reach the business tender list as if it were one
+        (v1.1 §5.6; docs/08 §8.4). Test Mode being OFF does not make a business send acceptable
+        here — the rule is about the *kind* of message, not the Test Mode switch.
+        """
+        if not raw_notice or not selection.addresses:
+            return
+        if selection.list_types - {"dev_alert"}:
+            raise NotificationSafetyError(
+                NOTIFICATION_ROUTING_FAILED,
+                "refusing send: raw notice resolved to a non-dev recipient",
+            )
+
+    @staticmethod
+    def _dedupe_key(
+        tender: Tender, verdict: Verdict | None, selection: RecipientSelection
+    ) -> str:
         # Exactly the documented identity: tender + verdict + recipient-set hash.  Do not add
         # timestamps, provider names, or delivery attempts; those would defeat deduplication.
-        raw = f"{tender.id}|{verdict.id}|{selection.recipient_set_hash}"
+        # A raw notice has no verdict, so it substitutes a stable sentinel rather than a
+        # varying value — the key must stay identical across retries, otherwise a retried
+        # failure notice would send a fresh email on every pass.
+        verdict_part = str(verdict.id) if verdict is not None else "raw-notice"
+        raw = f"{tender.id}|{verdict_part}|{selection.recipient_set_hash}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     @staticmethod
@@ -1850,6 +1930,26 @@ def _capabilities_for(row: MailProviderModel) -> Capabilities:
     else:
         values = {key: raw[key] for key in _CAPABILITY_KEYS if key in raw}
     return Capabilities(**values)
+
+
+def _assessed_from_notice_only(
+    verdict: Verdict | None,
+    pairs: list[tuple[Document, MailAttachment]],
+    failed: list[str],
+    skipped: list[str],
+) -> bool:
+    """Whether this verdict rests on the tender's notice rather than on a downloaded document.
+
+    Derived here, from state the notification layer already holds, rather than stored on the
+    verdict row: it is a fact about which files the source offered, and every input to this
+    decision is one the renderer would otherwise be silently assuming.
+
+    All three collections must be empty. ``pairs`` empty with ``failed`` or ``skipped``
+    populated means files *were* offered and something went wrong with them — that is a
+    download or extraction failure, already reported through ``incomplete_inputs``, and
+    describing it as "no downloadable source files" would misstate what the source did.
+    """
+    return verdict is not None and not pairs and not failed and not skipped
 
 
 def _as_items(value: Any) -> tuple[Any, ...]:

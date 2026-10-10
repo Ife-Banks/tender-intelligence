@@ -39,6 +39,15 @@ def _fixture(name: str) -> str:
         return fh.read()
 
 
+def _bare_adapter() -> WahoPaginatedAdapter:
+    """An adapter with no transport, for exercising deadline parsing in isolation."""
+    return WahoPaginatedAdapter(
+        LISTING_URL,
+        fetcher=lambda url: HttpResponse(200, {}, "", url),
+        policy=CrawlPolicy(request_interval_seconds=0.0),
+    )
+
+
 def _detail_url(tender_id: str) -> str:
     return urllib.parse.urljoin(LISTING_URL, f"/tenders/tenders/{tender_id}/list")
 
@@ -152,6 +161,185 @@ def test_missing_deadline_component_never_yields_naive() -> None:
     assert detail.listing.deadline_at is None
     assert detail.listing.deadline_timezone is None
     assert (detail.listing.raw_metadata["deadline_raw"] or "").endswith("30 November 2026")
+
+
+def _inline_adapter(html: str) -> WahoPaginatedAdapter:
+    """An adapter whose detail page is *html*, for cases no fixture file covers."""
+    return WahoPaginatedAdapter(
+        listing_url=LISTING_URL,
+        fetcher=lambda url: HttpResponse(
+            200, {"content-type": "text/html; charset=utf-8"}, html, url
+        ),
+        policy=CrawlPolicy(request_interval_seconds=0.0),
+    )
+
+
+def test_cloudflare_email_protection_is_not_a_document() -> None:
+    """A bot-management script must never be counted as a tender attachment.
+
+    Cloudflare renders protected emails as an anchor pointing at
+    ``/cdn-cgi/l/email-protection``. It sits inside whatever block the page used, so the
+    container rule accepted it: one bogus "attachment" that 404s, and — when it was the only
+    link — a verdict with no requirement sources. Regression guard for a live failure.
+    """
+    html = """
+    <div class="card-header"><h5><a href="/tenders/tenders/1/list">Tender</a></h5></div>
+    <div class="card-body">
+      <p>Contact <a href="/cdn-cgi/l/email-protection">[emailprotected]</a> for details.</p>
+      <ol>
+        <li><a href="/uploads/tenders/1/tender_document.pdf">Tender Document</a></li>
+      </ol>
+    </div>
+    """
+    attachments = _inline_adapter(html).get_attachments("1")
+
+    urls = [a.source_url for a in attachments]
+    assert not any("cdn-cgi" in url for url in urls), (
+        f"email-protection must be excluded; got {urls}"
+    )
+    assert any(url.endswith("tender_document.pdf") for url in urls), (
+        f"the real document must still be found; got {urls}"
+    )
+
+
+def test_email_protection_alone_yields_no_attachments() -> None:
+    """When the only in-block link is the Cloudflare script, there are no attachments."""
+    html = """
+    <div class="card-header"><h5><a href="/tenders/tenders/1/list">Tender</a></h5></div>
+    <div class="card-body">
+      <p><a href="/cdn-cgi/l/email-protection">[emailprotected]</a></p>
+    </div>
+    """
+    assert _inline_adapter(html).get_attachments("1") == []
+
+
+# ---------------------------------------------------------------------------
+# Deadlines stated as a remaining duration rather than a date
+# ---------------------------------------------------------------------------
+
+#: Several portals publish only "5 days left". The offset is real information, so it is
+#: anchored to the moment the page was observed instead of discarded — but labelled, because
+#: it is an estimate and never a published instant.
+OBSERVED = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)
+
+
+def _deadline(adapter, text: str):
+    return adapter._parse_deadline(text, now=OBSERVED)
+
+
+def test_remaining_days_are_anchored_to_the_observation_time() -> None:
+    deadline, tz_name, raw = _deadline(_bare_adapter(), "Closing in 5 days left")
+    assert deadline == datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+    assert deadline.tzinfo is not None, "a derived deadline is still timezone-aware"
+    assert tz_name == "UTC"
+    assert "derived" in raw and "approximate" in raw, (
+        f"provenance must be recorded so it is not read as a published deadline: {raw!r}"
+    )
+
+
+def test_remaining_hours_are_not_added_as_days() -> None:
+    """A hours countdown must add hours.
+
+    Regression guard: both patterns once shared a ``days`` group name, so "3 hours left"
+    anchored three *days* out.
+    """
+    deadline, _, _ = _deadline(_bare_adapter(), "3 hours left")
+    assert deadline == datetime(2026, 10, 4, 15, 0, tzinfo=UTC)
+
+
+def test_implausible_counts_are_refused_not_truncated() -> None:
+    """``9999 days left`` must be rejected, not silently read as ``999`` days."""
+    deadline, _, raw = _deadline(_bare_adapter(), "9999 days left")
+    assert deadline is None
+    assert raw is None
+
+
+def test_qualitative_label_is_reported_but_never_converted() -> None:
+    """"Closing Soon" states no offset, so no date may be invented from it."""
+    deadline, tz_name, raw = _deadline(_bare_adapter(), "Tender Closing Soon")
+    assert deadline is None
+    assert tz_name is None
+    assert raw == "Closing Soon", "the label is still recorded so the gap is visible"
+
+
+def test_stated_date_wins_over_a_relative_count() -> None:
+    """A published date is better evidence than a countdown beside it."""
+    adapter = _bare_adapter()
+    deadline, tz_name, _ = adapter._parse_deadline(
+        "Deadline for submission of applications: 24 September 2026 at 1.00 pm GMT. 2 days left",
+        now=OBSERVED,
+    )
+    assert deadline == datetime(2026, 9, 24, 13, 0, tzinfo=UTC)
+    assert tz_name == "GMT"
+
+
+def test_naive_observation_time_is_treated_as_utc() -> None:
+    """A naive anchor is coerced, so the result can never be a naive deadline."""
+    adapter = _bare_adapter()
+    deadline, _, _ = adapter._parse_deadline("5 days left", now=datetime(2026, 10, 4, 12, 0))
+    assert deadline is not None
+    assert deadline.tzinfo is not None
+
+
+def test_no_deadline_text_yields_nothing_at_all() -> None:
+    deadline, tz_name, raw = _deadline(_bare_adapter(), "Supply of farming kits")
+    assert (deadline, tz_name, raw) == (None, None, None)
+
+
+def test_relative_selector_scopes_a_bare_count_to_the_countdown_element() -> None:
+    """A bare "N days" is only a deadline inside the element the site marks as one.
+
+    Without the selector, "delivery within 5 days" in a tender's own text would be read as the
+    bid deadline. With it, only the configured countdown element is consulted.
+    """
+    from bs4 import BeautifulSoup
+
+    html = (
+        '<div class="row">'
+        "<p>Delivery within 30 days of contract award.</p>"
+        '<div class="opp-row-deadline"><div class="opp-row-countdown">5 days</div></div>'
+        "</div>"
+    )
+    row = BeautifulSoup(html, "html.parser").select_one("div.row")
+
+    scoped = WahoPaginatedAdapter(
+        LISTING_URL,
+        fetcher=lambda url: HttpResponse(200, {}, "", url),
+        parser_config={
+            "relative_deadline_selector": "div.opp-row-countdown",
+            # A site whose countdown omits "left" also needs the looser phrase; the selector
+            # alone only narrows *where* the text is read from, not what counts as a match.
+            "relative_deadline_patterns": [
+                r"(?<![\d.])(?P<days>\d{1,4})(?![\d.])\s*(?:calendar\s+|business\s+)?days?",
+            ],
+        },
+        policy=CrawlPolicy(request_interval_seconds=0.0),
+    )
+    deadline, _, raw = scoped._parse_deadline(
+        row.get_text(" ", strip=True), now=OBSERVED, relative_text=scoped._countdown_text(row)
+    )
+    assert deadline == datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+    assert "5 days" in raw
+
+    # Unscoped, the same loose pattern reads the delivery phrase and produces the wrong instant
+    # - which is exactly why the selector has to be configured alongside it.
+    unscoped = WahoPaginatedAdapter(
+        LISTING_URL,
+        fetcher=lambda url: HttpResponse(200, {}, "", url),
+        parser_config={
+            "relative_deadline_patterns": [
+                r"(?<![\d.])(?P<days>\d{1,4})(?![\d.])\s*(?:calendar\s+|business\s+)?days?",
+            ],
+        },
+        policy=CrawlPolicy(request_interval_seconds=0.0),
+    )
+    assert unscoped._countdown_text(row) is None
+    loose, _, _ = unscoped._parse_deadline(
+        row.get_text(" ", strip=True),
+        now=OBSERVED,
+        relative_text=unscoped._countdown_text(row),
+    )
+    assert loose == datetime(2026, 11, 3, 12, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------

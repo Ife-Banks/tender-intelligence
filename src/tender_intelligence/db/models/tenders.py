@@ -25,7 +25,19 @@ if TYPE_CHECKING:
     from tender_intelligence.db.models.documents import Document
     from tender_intelligence.db.models.sources import Source
 
-TENDER_STATUSES = ("new", "updated", "processed", "verdict_failed", "awaiting_budget", "awaiting_approved_provider")
+TENDER_STATUSES = (
+    "new",
+    "updated",
+    "processed",
+    "verdict_failed",
+    "awaiting_budget",
+    "awaiting_approved_provider",
+    #: Terminal. The deadline passed while the tender was still unprocessed, so it can no longer
+    #: be bid on and must never re-enter the pipeline. Set explicitly (operator action or the
+    #: expiry sweep), never inferred mid-run — a deadline crossing during a run is not a reason
+    #: to stop processing a tender that was already selected.
+    "expired",
+)
 
 
 class Tender(Base, TimestampMixin):

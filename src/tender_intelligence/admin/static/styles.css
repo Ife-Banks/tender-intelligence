@@ -141,6 +141,7 @@ main { width: min(1480px, 100%); flex: 1; margin-inline: auto; padding: clamp(1r
 .field:has(input[type="checkbox"]) { grid-template-columns: 24px 1fr; align-items: center; }
 .field:has(input[type="checkbox"]) > span:first-child { grid-column: 2; grid-row: 1; }
 .field:has(input[type="checkbox"]) input { grid-column: 1; grid-row: 1; }
+.field:has(input[type="checkbox"]) > .field-help { grid-column: 2; grid-row: 2; min-width: 0; }
 .field-help, .optional { color: var(--color-muted); font-size: .75rem; font-weight: 400; }
 .form-actions { justify-content: flex-end; padding-top: .4rem; }
 .form-error { color: var(--color-danger); font-size: .8rem; }

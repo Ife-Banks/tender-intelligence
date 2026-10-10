@@ -111,6 +111,7 @@ from tender_intelligence.orchestrator.status import (
     StageOutcome,
     StageStatus,
 )
+from tender_intelligence.processing.notice import NoticeSource, is_notice
 from tender_intelligence.processing.service import DocumentProcessingService
 from tender_intelligence.triage.service import (
     LLMClientFactory,
@@ -120,6 +121,17 @@ from tender_intelligence.triage.service import (
 )
 
 log = logging.getLogger("tender_intelligence.orchestrator.coordinator")
+
+#: How many persisted-but-unverdicted tenders one run may re-drive. Bounded so a backlog left
+#: by an interrupted run drains over several passes instead of one oversized crawl.
+#:
+#: **Defaults to 0 — recovery is opt-in.** ``status='new'`` alone cannot distinguish a tender
+#: whose run was interrupted from one that legitimately completed every configured stage and
+#: simply had no verdict stage to move it on. With no Stage B wired, a fully processed tender
+#: stays ``new`` forever, so an always-on recovery would re-drive it on *every* run — exactly
+#: the waste §13 exists to prevent, and it would break that contract. An operator who knows
+#: their pipeline has Stage B wired opts in by setting a positive limit.
+DEFAULT_UNPROCESSED_RECOVERY_LIMIT = 0
 
 
 @dataclass(frozen=True)
@@ -137,6 +149,41 @@ class TenderWorkItem:
 
 
 @dataclass(frozen=True)
+class _RawNoticeCandidate:
+    """A tender whose Stage B verdict is unavailable, queued for a raw notice (v1.1 §5.6)."""
+
+    decision: TriageDecision
+    reason: str
+
+
+@dataclass(frozen=True)
+class _VerdictBatch:
+    """Stage 14's product: verdicts to report on, plus failures that still need reporting.
+
+    One payload because :class:`~tender_intelligence.orchestrator.stages.StageExecution`
+    carries a single value; splitting the two across a side channel would let a failure be
+    dropped again, which is the bug this type exists to make impossible.
+    """
+
+    available: tuple[tuple[TriageDecision, object], ...] = ()
+    unavailable: tuple[_RawNoticeCandidate, ...] = ()
+
+
+@dataclass(frozen=True)
+class _DetailProduct:
+    """Stage 07's product: what each tender's detail page yielded.
+
+    Both halves are needed downstream and they must stay together — the attachments drive stage
+    08, and the parsed detail is what stage 09 falls back to when the attachments come back
+    empty. A tender missing from ``details`` had a detail-page failure, which stage 07 has
+    already recorded.
+    """
+
+    attachments: dict[int, list[TenderAttachment]]
+    details: dict[int, TenderDetail]
+
+
+@dataclass(frozen=True)
 class _Discovery:
     """Stage 04's product: the built adapter plus the candidates it enumerated."""
 
@@ -151,6 +198,8 @@ class _ProcessingTally:
     documents: int
     bundles_complete: int
     bundles_incomplete: int
+    #: Tenders whose bundle holds only the published notice because nothing was downloadable.
+    notice_only: int = 0
 
 
 class _RetryableAcquisitionError(Exception):
@@ -189,6 +238,7 @@ class RunCoordinator:
         notification_dispatcher: object | None = None,
         clock: Callable[[], datetime] | None = None,
         sleeper: Callable[[float], None] = time.sleep,
+        unprocessed_recovery_limit: int = DEFAULT_UNPROCESSED_RECOVERY_LIMIT,
     ) -> None:
         self._maker = session_factory
         self._registry = registry
@@ -207,6 +257,7 @@ class RunCoordinator:
         self._notification_dispatcher = notification_dispatcher
         self._clock = clock or (lambda: datetime.now(UTC))
         self._sleeper = sleeper
+        self._unprocessed_recovery_limit = max(0, int(unprocessed_recovery_limit))
 
     # -- public entry point -------------------------------------------------
 
@@ -457,6 +508,26 @@ class RunCoordinator:
             return
 
         state.work = self._resolve_work(spec, _work_external_ids(result), state.run_cid)
+        selected = {item.tender_id for item in state.work}
+        recovered = self._recover_unprocessed(spec, state, selected)
+        if recovered:
+            # Announced on stage 05's outcome rather than a stage of its own: recovery is part
+            # of deciding *what this run works on*, so the count belongs beside dedup's. It
+            # must be visible in RunHistory — a silently drained backlog would be
+            # indistinguishable from a source that simply had nothing to do.
+            state.work.extend(recovered)
+            log.info(
+                "re-driven %d unprocessed tender(s) alongside %d dedup selection(s)",
+                len(recovered),
+                len(selected),
+                extra={
+                    "stage": "05-dedup",
+                    "status": "recovered",
+                    "correlation_id": state.run_cid,
+                    "source_id": spec.id,
+                    "recovered_count": len(recovered),
+                },
+            )
         if not state.work:
             return
 
@@ -477,7 +548,9 @@ class RunCoordinator:
         if detail.outcome.status is StageStatus.FAILED:
             return
 
-        self._drive_after_detail(state, run_history_id, detail.payload or {}, None, manual=True)
+        self._drive_after_detail(
+            state, run_history_id, detail.payload or _DetailProduct({}, {}), None, manual=True
+        )
 
     def _drive_downstream(
         self,
@@ -493,13 +566,15 @@ class RunCoordinator:
         state.record(detail.outcome)
         if detail.outcome.status is StageStatus.FAILED:
             return
-        self._drive_after_detail(state, run_history_id, detail.payload or {}, dedup_result)
+        self._drive_after_detail(
+            state, run_history_id, detail.payload or _DetailProduct({}, {}), dedup_result
+        )
 
     def _drive_after_detail(
         self,
         state: _RunState,
         run_history_id: int | None,
-        attachments: dict[int, list[TenderAttachment]],
+        found: _DetailProduct,
         dedup_result: DedupResult | None,
         *,
         manual: bool = False,
@@ -507,14 +582,15 @@ class RunCoordinator:
 
         acquisition = self._runner.run(
             StageNumber.ACQUISITION,
-            lambda: self._stage_acquisition(state.work, attachments),
+            lambda: self._stage_acquisition(state.work, found.attachments),
         )
         state.record(acquisition.outcome)
         if acquisition.payload is not None:
             state.documents_acquired = acquisition.payload
 
         processing = self._runner.run(
-            StageNumber.PROCESSING, lambda: self._stage_processing(state.work)
+            StageNumber.PROCESSING,
+            lambda: self._stage_processing(state.work, found.details),
         )
         state.record(processing.outcome)
         if processing.payload is not None:
@@ -535,23 +611,27 @@ class RunCoordinator:
                 lambda: self._stage_verdict(passed_decisions),
             )
             state.record(verdict.outcome)
-            verdicts = verdict.payload or []
+            batch = verdict.payload or _VerdictBatch()
             if self._notification_dispatcher is None:
                 state.record_skipped(StageNumber.NOTIFICATION, "no notification channel configured")
             else:
                 notification = self._runner.run(
                     StageNumber.NOTIFICATION,
                     lambda: self._stage_notifications(
-                        verdicts, dedup_result, state.work, manual_existing=manual
+                        batch.available,
+                        dedup_result,
+                        state.work,
+                        manual_existing=manual,
+                        raw_notices=batch.unavailable,
                     ),
                 )
                 state.record(notification.outcome)
 
     def _stage_manual_detail(
         self, spec: SourceSpec, work: Sequence[TenderWorkItem]
-    ) -> tuple[StageReport, dict[int, list[TenderAttachment]]]:
+    ) -> tuple[StageReport, _DetailProduct]:
         adapter = self._registry.build(spec)
-        report, attachments = self._stage_detail(adapter, work)
+        report, found = self._stage_detail(adapter, work)
         return (
             StageReport(
                 detail=f"manual Process Now: {report.detail}",
@@ -560,7 +640,7 @@ class RunCoordinator:
                 attempts=report.attempts,
                 status=report.status,
             ),
-            attachments,
+            found,
         )
 
     # -- 04 discovery -------------------------------------------------------
@@ -645,14 +725,18 @@ class RunCoordinator:
 
     def _stage_detail(
         self, adapter: SourceAdapter, work: Sequence[TenderWorkItem]
-    ) -> tuple[StageReport, dict[int, list[TenderAttachment]]]:
+    ) -> tuple[StageReport, _DetailProduct]:
         """Fetch each tender's detail page, resolve its deadline, and collect attachments.
 
         Prompt 12.1: calls ``get_detail()`` (not just ``get_attachments()``) so the
         detail-page deadline can be extracted and compared against the listing-page
         deadline already persisted.  Per-tender failures are isolated (prompt 10 §15).
+
+        The parsed detail travels to stage 09 as well: it is the only place the tender's own
+        published text exists, and stage 09 needs it when nothing was downloadable.
         """
         attachments: dict[int, list[TenderAttachment]] = {}
+        details: dict[int, TenderDetail] = {}
         failures = 0
         deadlines_resolved = 0
         deadlines_unresolved = 0
@@ -661,6 +745,7 @@ class RunCoordinator:
             try:
                 detail = adapter.get_detail(item.external_id)
                 attachments[item.tender_id] = list(detail.attachments)
+                details[item.tender_id] = detail
                 # Resolve and persist deadline (Prompt 12.1)
                 resolved = self._resolve_deadline(item, detail)
                 if resolved:
@@ -683,7 +768,33 @@ class RunCoordinator:
                 item_count=len(work),
                 failed_items=failures,
             ),
-            attachments,
+            _DetailProduct(attachments=attachments, details=details),
+        )
+
+    @staticmethod
+    def _notice_for(item: TenderWorkItem, details: dict[int, TenderDetail]) -> NoticeSource | None:
+        """The tender's published notice as Stage B input, or ``None`` when there is nothing.
+
+        Built from the detail page already fetched in stage 07, so this costs no extra request.
+        ``body_text`` comes from the adapter rather than from HTML here: parsing a page is the
+        adapter's job (PROJECT_RULES #10), and the processing layer is handed plain text.
+        """
+        detail = details.get(item.tender_id)
+        if detail is None:
+            return None
+        listing = detail.listing
+        return NoticeSource(
+            title=listing.title,
+            source_url=listing.url,
+            procuring_body=detail.procuring_body,
+            reference_numbers=tuple(detail.reference_numbers),
+            requirements_hints=tuple(detail.requirements_hints),
+            scope=detail.scope,
+            published_at=listing.published_at,
+            deadline_at=listing.deadline_at,
+            deadline_timezone=listing.deadline_timezone,
+            language=dict(listing.raw_metadata or {}).get("language"),
+            body_text=detail.body_text,
         )
 
     def _resolve_deadline(
@@ -716,30 +827,10 @@ class RunCoordinator:
                     raw_metadata=dict(tender.raw_metadata or {}),
                 )
 
-                # Attempt document-bundle lookup for text-based fallback
-                bundle_docs: list[tuple[int, str, str]] = []
-                try:
-                    # ExtractionStore requires ObjectStorage — only attempt if processing ran
-                    # The coordinator does not own the store directly; check via document rows
-                    from sqlalchemy import select as sa_select
-
-                    from tender_intelligence.db.models.documents import Document
-                    doc_rows = session.scalars(
-                        sa_select(Document)
-                        .where(
-                            Document.tender_id == item.tender_id,
-                            Document.extraction_status == "extracted",
-                            Document.extracted_text_ref.is_not(None),
-                        )
-                    ).all()
-                    # Only attempt text read if processing service is available via storage
-                except Exception:  # noqa: BLE001
-                    doc_rows = []
-
                 result = self._deadline.resolve(
                     listing,
                     detail=detail,
-                    bundle_docs=bundle_docs,
+                    bundle_docs=[],
                     correlation_id=item.correlation_id,
                 )
 
@@ -859,7 +950,7 @@ class RunCoordinator:
     # -- 09 processing ------------------------------------------------------
 
     def _stage_processing(
-        self, work: Sequence[TenderWorkItem]
+        self, work: Sequence[TenderWorkItem], details: dict[int, TenderDetail]
     ) -> tuple[StageReport, _ProcessingTally]:
         """Extract text/tables for each tender's documents, isolating failures (§15).
 
@@ -869,36 +960,54 @@ class RunCoordinator:
         report a stage COMPLETED while a document in it produced nothing. Either way the run
         becomes PARTIAL, never FAILED: §19 G requires a document-level failure not to become a
         whole-run failure.
+
+        Each tender also passes the notice from its detail page. Stage 09 uses it **only** when
+        nothing was downloaded, and reports how often that happened so a source that has quietly
+        stopped serving documents is visible in the run record instead of only in the emails.
         """
         documents = 0
         complete = 0
         incomplete = 0
         failures = 0
+        notice_only = 0
         for item in work:
             try:
                 bundle = self._processing.process_tender(
-                    item.tender_id, correlation_id=item.correlation_id
+                    item.tender_id,
+                    correlation_id=item.correlation_id,
+                    notice=self._notice_for(item, details),
                 )
             except Exception as exc:  # noqa: BLE001 - per-tender isolation (prompt 10 §15)
                 failures += 1
                 self._item_failure(StageNumber.PROCESSING, item, exc)
                 continue
             documents += len(bundle.documents)
+            if any(is_notice(document) for document in bundle.documents):
+                notice_only += 1
             if bundle.incomplete_inputs:
                 incomplete += 1
             else:
                 complete += 1
+        notice_note = (
+            f", {notice_only} assessed from the published notice alone"
+            if notice_only
+            else ""
+        )
         return (
             StageReport(
                 detail=(
                     f"{documents} document(s) across {len(work)} tender(s); {complete} complete "
                     f"bundle(s), {incomplete} incomplete, {failures} tender-level failure(s)"
+                    f"{notice_note}"
                 ),
                 item_count=len(work),
                 failed_items=failures + incomplete,
             ),
             _ProcessingTally(
-                documents=documents, bundles_complete=complete, bundles_incomplete=incomplete
+                documents=documents,
+                bundles_complete=complete,
+                bundles_incomplete=incomplete,
+                notice_only=notice_only,
             ),
         )
 
@@ -956,16 +1065,24 @@ class RunCoordinator:
 
     def _stage_verdict(
         self, decisions: Sequence[TriageDecision]
-    ) -> tuple[StageReport, list[tuple[TriageDecision, object]]]:
-        """Run Stage B only for persisted Stage A PASS decisions."""
+    ) -> tuple[StageReport, _VerdictBatch]:
+        """Run Stage B only for persisted Stage A PASS decisions.
+
+        Returns available verdicts **and** the failures, because v1.1 §5.6 requires a failed
+        verdict to still produce a raw notice ("so nothing is lost"). Discarding the failures
+        here — as this stage used to — meant a failed verdict produced no notification at all,
+        which is the silent-loss failure docs/04 §4.2 row 7 rules out.
+        """
         succeeded = failed = 0
         available: list[tuple[TriageDecision, object]] = []
+        unavailable: list[_RawNoticeCandidate] = []
         for decision in decisions:
             try:
                 outcome = self._verdict_handoff(decision)  # type: ignore[misc]
                 outcome_status = getattr(getattr(outcome, "status", None), "value", None)
                 if outcome_status is not None and outcome_status != "VERDICT_AVAILABLE":
                     failed += 1
+                    error_code = getattr(outcome, "error_code", None) or "verdict_unavailable"
                     log.warning(
                         "Stage B did not produce an available verdict",
                         extra={
@@ -973,20 +1090,31 @@ class RunCoordinator:
                             "tender_id": decision.tender_id,
                             "correlation_id": decision.correlation_id,
                             "status": outcome_status,
-                            "error_code": getattr(outcome, "error_code", "verdict_unavailable"),
+                            "error_code": error_code,
                         },
                     )
+                    unavailable.append(_RawNoticeCandidate(decision, str(error_code)))
                 else:
                     succeeded += 1
                     if outcome_status == "VERDICT_AVAILABLE" and getattr(outcome, "verdict_id", None):
                         available.append((decision, outcome))
             except Exception as exc:  # per-tender isolation mirrors Stage A
                 failed += 1
+                error_code = getattr(exc, "error_code", "verdict_failed")
                 log.warning("Stage B failed", extra={"stage": StageNumber.VERDICT.value,
                     "tender_id": decision.tender_id, "correlation_id": decision.correlation_id,
-                    "error_code": getattr(exc, "error_code", "verdict_failed")})
-        return StageReport(detail=f"{succeeded} completed, {failed} failed", item_count=len(decisions),
-                           failed_items=failed), available
+                    "error_code": error_code})
+                unavailable.append(
+                    _RawNoticeCandidate(decision, str(error_code))
+                )
+        return (
+            StageReport(
+                detail=f"{succeeded} completed, {failed} failed",
+                item_count=len(decisions),
+                failed_items=failed,
+            ),
+            _VerdictBatch(available=tuple(available), unavailable=tuple(unavailable)),
+        )
 
     def _stage_notifications(
         self,
@@ -995,8 +1123,19 @@ class RunCoordinator:
         work_items: Sequence[TenderWorkItem],
         *,
         manual_existing: bool = False,
+        raw_notices: Sequence[_RawNoticeCandidate] = (),
     ) -> tuple[StageReport, int]:
-        """Notify only persisted, available verdicts; routing/Test Mode remain service-owned."""
+        """Notify persisted verdicts, and still report tenders whose verdict is unavailable.
+
+        Two message kinds leave this stage. A normal notification needs a verdict; a
+        :class:`~tender_intelligence.notifications.contracts.NotificationKind.RAW_NOTICE` does
+        not, and exists because v1.1 §5.6 requires a failed assessment to be reported rather than
+        dropped. Raw notices bypass the new/update provenance gate — that gate exists to stop an
+        *assessment* being mislabelled as new, and there is no assessment to mislabel — but they
+        keep the same delivery accounting, so a failing mail chain is still visible.
+
+        Routing and Test Mode stay service-owned; this stage decides only what to send.
+        """
         from tender_intelligence.notifications.contracts import NotificationEvent, NotificationKind
 
         updates = {
@@ -1057,10 +1196,58 @@ class RunCoordinator:
                     "correlation_id": work.correlation_id,
                     "error_code": getattr(exc, "error_code", "notification_failed"),
                 })
+
+        # ── Raw notices for verdicts Stage B could not produce (v1.1 §5.6) ──────────────
+        raw_sent = 0
+        for candidate in raw_notices:
+            work = work_by_id.get(candidate.decision.tender_id)
+            if work is None:
+                failed += 1
+                continue
+            event = NotificationEvent(
+                tender_id=work.tender_id,
+                verdict_id=None,
+                kind=NotificationKind.RAW_NOTICE,
+                material_change=False,
+                correlation_id=work.correlation_id,
+                unavailability_reason=candidate.reason,
+            )
+            try:
+                outcome = self._notification_dispatcher.send(event)  # type: ignore[attr-defined]
+                if getattr(outcome, "status", "") in {"sent", "already_notified", "dry_run"}:
+                    raw_sent += 1
+                else:
+                    failed += 1
+                    log.warning(
+                        "raw notice delivery did not complete",
+                        extra={
+                            "stage": StageNumber.NOTIFICATION.value,
+                            "tender_id": work.tender_id,
+                            "correlation_id": work.correlation_id,
+                            "error_code": getattr(outcome, "error_code", None),
+                        },
+                    )
+            except Exception as exc:  # noqa: BLE001 - a failure notice must not end the run
+                failed += 1
+                log.warning(
+                    "raw notice delivery failed",
+                    extra={
+                        "stage": StageNumber.NOTIFICATION.value,
+                        "tender_id": work.tender_id,
+                        "correlation_id": work.correlation_id,
+                        "error_code": getattr(exc, "error_code", "notification_failed"),
+                    },
+                )
+
+        total = len(verdicts) + len(raw_notices)
         return StageReport(
-            detail=f"{succeeded} delivered or already notified, {failed} failed",
-            item_count=len(verdicts), failed_items=failed,
-        ), succeeded
+            detail=(
+                f"{succeeded + raw_sent} delivered or already notified, {failed} failed"
+                + (f"; {raw_sent} raw notice(s) for unavailable assessments" if raw_sent else "")
+            ),
+            item_count=total,
+            failed_items=failed,
+        ), succeeded + raw_sent
 
     # -- dry run planning ---------------------------------------------------
 
@@ -1118,6 +1305,73 @@ class RunCoordinator:
             ]
         items.sort(key=lambda item: item.external_id)  # deterministic order across runs
         return items
+
+    def _recover_unprocessed(
+        self,
+        spec: SourceSpec,
+        state: _RunState,
+        already_selected: set[int],
+    ) -> list[TenderWorkItem]:
+        """Re-drive tenders this source persisted but never carried to a verdict.
+
+        Dedup classifies a listing it has seen before and whose material fields have not
+        changed as ``UNCHANGED``, and §13 deliberately excludes those from the work set. That
+        is correct for a tender already processed — but it also swallows a tender whose first
+        run was interrupted *after* persistence and *before* the verdict: its row exists, so
+        every later crawl calls it unchanged, so it is never selected again, so it is never
+        triaged, never verdicted and never notified. Nothing in the pipeline re-entered it.
+
+        This is that missing recovery edge. A row still at ``status='new'`` is by definition
+        one that never reached a verdict (prompt 06 §4 creates it as ``new``; only the verdict
+        stage moves it to ``processed`` or ``verdict_failed``), so it is safe to re-drive and
+        it is the only status selected. ``verdict_failed`` stays terminal per
+        docs/13-open-decisions.md O21 — a deliberate, documented decision, not an oversight —
+        so those rows are deliberately *not* recovered here.
+
+        Recovery is capped by ``unprocessed_recovery_limit`` so a large backlog drains over
+        several runs instead of one oversized crawl, and it is reported in the run's stage
+        detail so a drained backlog is visible in ``RunHistory`` rather than silent.
+
+        Already-expired tenders are never selected — see
+        :meth:`TenderRepository.list_unprocessed`. Re-driving them would spend an LLM call and
+        a raw-notice email per tender on something nobody can bid on.
+        """
+        if self._unprocessed_recovery_limit <= 0:
+            return []
+        with self._maker() as session:
+            rows = TenderRepository(session).list_unprocessed(
+                spec.id, limit=self._unprocessed_recovery_limit
+            )
+            selected = already_selected
+            recovered = [
+                TenderWorkItem(
+                    tender_id=int(row.id),
+                    external_id=str(row.external_id),
+                    # The tender's own correlation id, never the run's (prompt 10 §4): the
+                    # recovery must be traceable to the tender, not to this attempt.
+                    correlation_id=str(row.correlation_id or state.run_cid),
+                    is_update=bool(row.is_update),
+                )
+                for row in rows
+                if int(row.id) not in selected
+            ]
+        if not recovered:
+            return []
+        # No re-sort here: `list_unprocessed` already returned oldest-first, and that order is
+        # the point — it is what makes a capped recovery work through the backlog predictably.
+        # `_resolve_work`'s sort is separate because its input has no age ordering to preserve.
+        log.info(
+            "recovering %d unprocessed tender(s) for source %s",
+            len(recovered),
+            spec.name,
+            extra={
+                "stage": "recovery",
+                "status": "start",
+                "correlation_id": state.run_cid,
+                "source_id": spec.id,
+            },
+        )
+        return recovered
 
     # -- run row ------------------------------------------------------------
 

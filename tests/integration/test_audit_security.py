@@ -6,11 +6,15 @@ logs, alerts, ConfigChangeLog, or timeline queries.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy.orm import Session
 
+from tender_intelligence.audit.alert_delivery import _alert_dedupe_key
 from tender_intelligence.audit.alert_manager import AlertManager, AlertTrigger, NullAlertDelivery
 from tender_intelligence.audit.health_digest import HealthDigestBuilder
 from tender_intelligence.audit.timeline import TimelineService
@@ -274,6 +278,37 @@ def test_health_digest_no_secrets(db_session: Session) -> None:
     # Should have summary info only
     assert "Run Summary:" in digest_text
     assert len(digest_text) < 5000  # Reasonable digest size
+
+
+def test_alert_dedupe_key_is_stable_across_interpreter_restarts() -> None:
+    """The same alert must map to the same key in every process.
+
+    ``hash()`` is salted per interpreter, so the key it produced changed on each worker
+    restart. The unique index therefore never matched an earlier send and a single
+    outage re-mailed the identical alert every time the worker came back. Reproducing
+    this needs a second interpreter, because a fresh salt only appears across processes.
+    """
+    message = "Source connection failed for WAHO"
+    here = _alert_dedupe_key("source_failed", message)
+
+    # A different PYTHONHASHSEED would change a salted hash() and nothing else.
+    elsewhere = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from tender_intelligence.audit.alert_delivery import _alert_dedupe_key as k;"
+            "print(k('source_failed', 'Source connection failed for WAHO'))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "PYTHONHASHSEED": "12345"},
+    ).stdout.strip()
+
+    assert here == elsewhere
+    # Different alert types and different messages must not collide.
+    assert here != _alert_dedupe_key("source_recovered", message)
+    assert here != _alert_dedupe_key("source_failed", message + " (retry)")
 
 
 def test_alert_delivery_metadata_safe(

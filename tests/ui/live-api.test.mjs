@@ -93,15 +93,34 @@ test("API calls do not send simulated actor or role headers", async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("missing API route selects labelled fixture preview, but forbidden remains a live API state", async () => {
+test("an unreachable API never silently substitutes fixture data; fixtures need an explicit opt-in", async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({ detail: { code: "not_found" } }), { status: 404, headers: { "content-type": "application/json" } });
+  try {
+    const api = await createApi();
+    assert.ok(api instanceof LiveAdminApi, "an unreachable server must not fabricate demo records");
+    assert.equal(api.connectionState, "offline");
+  } finally { globalThis.fetch = originalFetch; }
+
+  globalThis.window = { location: { search: "?fixtures=1" } };
   globalThis.fetch = async () => new Response(JSON.stringify({ detail: { code: "not_found" } }), { status: 404, headers: { "content-type": "application/json" } });
   try { assert.equal((await createApi()).connectionState, "fixture"); }
-  finally { globalThis.fetch = originalFetch; }
+  finally { globalThis.fetch = originalFetch; delete globalThis.window; }
+
   globalThis.fetch = async () => new Response(JSON.stringify({ detail: { code: "authorization_denied" } }), { status: 403, headers: { "content-type": "application/json" } });
   try {
     const api = await createApi();
     assert.ok(api instanceof LiveAdminApi);
     assert.equal(api.connectionState, "forbidden");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("a slow server is not mistaken for an absent one", async () => {
+  const abort = new Error("The operation was aborted.");
+  abort.name = "AbortError";
+  globalThis.fetch = async () => { throw abort; };
+  try {
+    const api = await createApi();
+    assert.ok(api instanceof LiveAdminApi);
   } finally { globalThis.fetch = originalFetch; }
 });
 

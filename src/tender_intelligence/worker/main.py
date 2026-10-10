@@ -35,6 +35,12 @@ if TYPE_CHECKING:
     from tender_intelligence.sources.polite import PoliteHttpClient
 
 
+#: Per-run cap on re-driving tenders this source persisted but never verdicted (docs/13 O25).
+#: Non-zero here because this path always wires Stage B — see ``build_pipeline``. Bounded so a
+#: backlog left by an interrupted run drains over several passes instead of one huge crawl.
+PRODUCTION_UNPROCESSED_RECOVERY_LIMIT = 25
+
+
 def build_pipeline(
     sessions: SessionManager,
     storage: Any,
@@ -45,6 +51,7 @@ def build_pipeline(
     fetcher_transport: Any | None = None,
     crawl_policy: Any | None = None,
     ocr: Any | None = None,
+    unprocessed_recovery_limit: int = PRODUCTION_UNPROCESSED_RECOVERY_LIMIT,
 ) -> tuple[RunCoordinator, Worker, PoliteHttpClient, DocumentFetcher, AdapterRegistry]:
     """Compose the full 04→14 ``RunCoordinator`` with Stage B wired.
 
@@ -123,6 +130,14 @@ def build_pipeline(
         registry=adapter_registry,
         dedup=DedupService(sessions),
         acquisition=DocumentAcquisitionService(sessions, storage=storage, fetcher=fetcher),
+        # Enabled here, though it is off by default on the coordinator. This path always wires
+        # Stage B (see this function's docstring), and every Stage B outcome — available,
+        # failed, or approval-pending — moves the tender off ``status='new'``
+        # (verdict/service.py: ``processed`` / ``verdict_failed`` /
+        # ``awaiting_approved_provider``). So ``new`` here means exactly "persisted but never
+        # reached a verdict", which is the stranded-backlog case O25 describes. Without this,
+        # an interrupted run's tenders are swallowed as UNCHANGED forever and never emailed.
+        unprocessed_recovery_limit=unprocessed_recovery_limit,
         # Scanned TORs are the normal case in this domain, so the real engine is wired here rather
         # than left as a test-time stub. default_ocr_engine probes once and yields None when the
         # binary is absent, which the processor records per document as ocr_failed.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 from collections.abc import AsyncIterator
@@ -29,18 +30,26 @@ logger = get_logger("tender_intelligence.admin")
 _scheduler_log = logging.getLogger("tender_intelligence.admin.scheduler")
 STATIC_DIR = Path(__file__).with_name("static")
 
+#: Per-run cap on re-driving tenders this source persisted but never verdicted (docs/13 O25).
+#: Matches worker/main.py — same pipeline, same behaviour, whichever entrypoint runs it.
+ADMIN_UNPROCESSED_RECOVERY_LIMIT = 25
+
 
 def _compose_run_coordinator(
     sessions: sessionmaker,
     storage: Any,
     registry: Any,
     llm_client_factory: Any | None = None,
+    unprocessed_recovery_limit: int = ADMIN_UNPROCESSED_RECOVERY_LIMIT,
 ):
     """Compose the existing shared pipeline for Admin's read-only source dry-run action."""
     from tender_intelligence.acquisition.fetcher import DocumentFetcher
     from tender_intelligence.acquisition.service import DocumentAcquisitionService
     from tender_intelligence.dedup.service import DedupService
-    from tender_intelligence.notifications.channels import EmailNotificationChannel, NotificationDispatcher
+    from tender_intelligence.notifications.channels import (
+        EmailNotificationChannel,
+        NotificationDispatcher,
+    )
     from tender_intelligence.notifications.service import NotificationService
     from tender_intelligence.orchestrator.config import ConfigLoader
     from tender_intelligence.orchestrator.coordinator import RunCoordinator
@@ -78,6 +87,12 @@ def _compose_run_coordinator(
             storage,
             _profile_client_factory(llm_client_factory or _default_llm_client_factory()),
         ),
+        # Same value as worker/main.py: this path also always wires Stage B, so every verdict
+        # outcome moves the tender off ``status='new'`` and ``new`` means "persisted but never
+        # verdicted" (docs/13 O25). Enabled so an operator pressing "Run source" gets the same
+        # self-healing the scheduled worker has, rather than a silently stranded backlog.
+        # Bounded per run; Test Mode still governs where any resulting mail lands.
+        unprocessed_recovery_limit=unprocessed_recovery_limit,
         notification_dispatcher=NotificationDispatcher(
             EmailNotificationChannel(
                 NotificationService(
@@ -165,7 +180,23 @@ async def _scheduled_source_loop(app: FastAPI, poll_seconds: int) -> None:
     active_run = None
     try:
         while True:
-            for decision in app.state.source_scheduler.decisions():
+            try:
+                decisions = app.state.source_scheduler.decisions()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                # A pass that cannot read the source list must not end the loop. The
+                # database may be briefly unreachable, or the schema may not be
+                # migrated yet; either way the next tick is the recovery path. Letting
+                # this escape ended the task, and the task's exception was then
+                # re-raised into whichever request happened to be shutting down.
+                _scheduler_log.exception(
+                    "scheduler poll failed",
+                    extra={"stage": "scheduler", "status": "error"},
+                )
+                await asyncio.sleep(poll_seconds)
+                continue
+            for decision in decisions:
                 if not decision.due:
                     continue
                 lock = app.state.source_run_locks.setdefault(decision.spec.id, threading.Lock())
@@ -186,10 +217,9 @@ async def _scheduled_source_loop(app: FastAPI, poll_seconds: int) -> None:
             await asyncio.sleep(poll_seconds)
     except asyncio.CancelledError:
         if active_run is not None:
-            try:
+            # Let an in-flight crawl finish rather than abandoning a half-written run.
+            with contextlib.suppress(Exception):
                 await asyncio.shield(active_run)
-            except Exception:  # noqa: BLE001
-                pass
         raise
 
 
@@ -295,6 +325,18 @@ def create_app(
                     await scheduler_task
                 except asyncio.CancelledError:
                     pass
+                except Exception:  # noqa: BLE001
+                    # Shutdown must not turn a background poller's failure into an
+                    # error on the request that happened to close the app.
+                    logger.warning(
+                        "scheduler loop exited with an error",
+                        extra={
+                            "stage": "shutdown",
+                            "status": "error",
+                            "error_class": "SchedulerError",
+                        },
+                        exc_info=True,
+                    )
                 app.state.scheduler_task = None
             for client in owned_pipeline_clients:
                 try:

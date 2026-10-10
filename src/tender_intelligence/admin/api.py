@@ -34,6 +34,7 @@ from tender_intelligence.db.audit import log_config_change
 from tender_intelligence.db.models import (
     AlertEvent,
     ConfigChangeLog,
+    Document,
     KnowledgeBaseVersion,
     LLMCall,
     LLMProfile,
@@ -47,6 +48,7 @@ from tender_intelligence.db.models import (
     Tender,
     Verdict,
 )
+from tender_intelligence.db.models.deadline import TenderDeadlineResolution
 from tender_intelligence.db.models.recipients import is_valid_email
 from tender_intelligence.db.repositories.notifications import MailProviderRepository
 from tender_intelligence.logging.structured import get_logger
@@ -910,19 +912,73 @@ def list_tenders(
     if recommendation:
         count_query = count_query.join(Verdict).where(Verdict.recommendation == recommendation)
     total = session.scalar(count_query) or 0
+    with_documents = _tender_ids_with_documents(session, list(rows))
     return {
         "items": [
-            _tender_view(session, row) for row in rows
+            _tender_view(session, row, has_documents=row.id in with_documents)
+            for row in rows
         ],
         "pagination": {"offset": offset, "limit": limit, "total": total},
     }
 
 
-def _tender_view(session: Session, row: Tender) -> dict[str, Any]:
+def _deadline_view(deadline: TenderDeadlineResolution | None) -> dict[str, Any]:
+    """Publish resolution status and provenance as separate fields.
+
+    ``deadline_source`` mixes the two vocabularies - provenance values
+    (``listing_page``/``detail_page``/``document``) alongside outcome values
+    (``conflicting``/``unresolved``). Reporting it as ``state`` meant a console could
+    never distinguish "read from the detail page" from "the sources disagree", and a
+    status check against "resolved" never matched.
+    """
+
+    if deadline is None:
+        return {"state": "unresolved", "source": None, "utc": None, "timezone": None}
+    source = deadline.deadline_source
+    if source == "conflicting":
+        state = "conflicting"
+    elif source == "unresolved" or deadline.deadline_resolved is None:
+        state = "unresolved"
+    else:
+        state = "resolved"
+    return {
+        "state": state,
+        "source": source,
+        "utc": _iso(deadline.deadline_resolved),
+        "timezone": deadline.deadline_timezone,
+    }
+
+
+def _tender_ids_with_documents(session: Session, rows: list[Tender]) -> set[int]:
+    """The tender ids that were actually offered at least one file.
+
+    One query for the whole page rather than one per row: the tenders list is the console's
+    busiest read, and this fact is a single grouped column.
+    """
+    ids = [row.id for row in rows]
+    if not ids:
+        return set()
+    statement = (
+        select(Document.tender_id)
+        .where(Document.tender_id.in_(ids))
+        .group_by(Document.tender_id)
+    )
+    return set(session.scalars(statement).all())
+
+
+def _tender_view(
+    session: Session, row: Tender, *, has_documents: bool | None = None
+) -> dict[str, Any]:
     deadline = row.deadline_resolution
     verdict = session.scalar(
         select(Verdict).where(Verdict.tender_id == row.id).order_by(Verdict.generated_at.desc())
     )
+    if has_documents is None:
+        has_documents = session.scalar(
+            select(func.count(Document.id)).where(Document.tender_id == row.id)
+        ) > 0
+    #: A verdict exists but no file was ever offered, so it rests on the published notice.
+    notice_only = verdict is not None and not has_documents
     return {
         "id": row.id,
         "source_id": row.source_id,
@@ -935,21 +991,27 @@ def _tender_view(session: Session, row: Tender) -> dict[str, Any]:
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
         "correlation_id": row.correlation_id,
-        "deadline": {
-            "state": deadline.deadline_source if deadline else "unresolved",
-            "utc": _iso(deadline.deadline_resolved) if deadline else None,
-            "timezone": deadline.deadline_timezone if deadline else None,
-        },
+        "deadline": _deadline_view(deadline),
         "verdict": (
             {
                 "id": verdict.id,
                 "recommendation": verdict.recommendation,
                 "confidence": verdict.confidence,
                 "urgency": verdict.urgency_flag,
+                "incomplete_inputs": verdict.incomplete_inputs,
+                # Published beside ``incomplete_inputs`` because "incomplete" and "the source
+                # never offered a file" are different facts with different consequences, and
+                # the console can only act on the second one.
+                "notice_only": notice_only,
             }
             if verdict
             else None
         ),
+        # The console reports input completeness per tender row. Expose the value
+        # from the latest verdict so the column reflects the actual assessment
+        # instead of always reporting that it was not provided.
+        "incomplete_inputs": verdict.incomplete_inputs if verdict else None,
+        "notice_only": notice_only,
         "notice": _safe_tree(row.raw_metadata),
     }
 

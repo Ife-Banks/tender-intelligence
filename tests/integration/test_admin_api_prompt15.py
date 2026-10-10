@@ -16,6 +16,7 @@ from tender_intelligence.admin.main import create_app
 from tender_intelligence.config.settings import get_env_settings
 from tender_intelligence.db.models import (
     ConfigChangeLog,
+    Document,
     LLMCall,
     LLMProfile,
     MailProvider,
@@ -745,6 +746,102 @@ def test_timeline_reads_existing_persisted_correlation_events(client, session_fa
     assert response.status_code == 200
     assert response.json()["correlation_id"] == correlation_id
     assert [event["stage"] for event in response.json()["events"]] == ["discovery"]
+
+
+def _tender_with_verdict(session_factory, *, documents: int, verdict: bool = True) -> int:
+    with session_factory() as session:
+        source = Source(
+            name=f"notice-source-{uuid.uuid4().hex[:8]}",
+            source_type="test_adapter",
+            base_url="https://source.test",
+            active=True,
+        )
+        session.add(source)
+        session.flush()
+        tender = Tender(
+            source_id=source.id,
+            external_id=f"ext-{uuid.uuid4().hex[:8]}",
+            url="https://source.test/1",
+            title="Tender fixture",
+            correlation_id=str(uuid.uuid4()),
+            raw_metadata={},
+        )
+        session.add(tender)
+        session.flush()
+        for index in range(documents):
+            session.add(
+                Document(
+                    tender_id=tender.id,
+                    source_url=f"https://source.test/annex-{index}.pdf",
+                    filename=f"annex-{index}.pdf",
+                )
+            )
+        if verdict:
+            session.add(
+                Verdict(
+                    tender_id=tender.id,
+                    recommendation="APPLY",
+                    confidence=0.65,
+                    urgency_flag=False,
+                    incomplete_inputs=True,
+                )
+            )
+        session.commit()
+        return tender.id
+
+
+def test_console_reports_a_verdict_reached_without_any_downloadable_file(
+    client, session_factory_gr
+):
+    """The console must say *which* input was missing, not merely that one was.
+
+    "Incomplete inputs" tells an operator to wait. "No downloadable source files" tells them to
+    go and find the document — the two lead to different actions, and only the second is true
+    for a portal that publishes a notice and withholds the tender document.
+    """
+    tender_id = _tender_with_verdict(session_factory_gr, documents=0)
+
+    response = client.get(f"/api/v1/tenders/{tender_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["notice_only"] is True
+    assert body["verdict"]["notice_only"] is True
+    assert body["incomplete_inputs"] is True
+
+
+def test_a_tender_with_a_document_is_not_reported_as_notice_only(
+    client, session_factory_gr
+):
+    tender_id = _tender_with_verdict(session_factory_gr, documents=1)
+
+    body = client.get(f"/api/v1/tenders/{tender_id}").json()
+
+    assert body["notice_only"] is False
+    assert body["verdict"]["notice_only"] is False
+
+
+def test_an_unassessed_tender_is_not_reported_as_notice_only(client, session_factory_gr):
+    """No verdict means no assessment was reached from anything, least of all the notice."""
+    tender_id = _tender_with_verdict(session_factory_gr, documents=0, verdict=False)
+
+    body = client.get(f"/api/v1/tenders/{tender_id}").json()
+
+    assert body["verdict"] is None
+    assert body["notice_only"] is False
+
+
+def test_tenders_list_carries_the_same_flag(client, session_factory_gr):
+    """The list and the detail must agree; the console reads the flag from the list column."""
+    notice_only_id = _tender_with_verdict(session_factory_gr, documents=0)
+    documented_id = _tender_with_verdict(session_factory_gr, documents=1)
+
+    response = client.get("/api/v1/tenders", params={"limit": 200})
+
+    assert response.status_code == 200
+    by_id = {item["id"]: item for item in response.json()["items"]}
+    assert by_id[notice_only_id]["notice_only"] is True
+    assert by_id[documented_id]["notice_only"] is False
 
 
 def test_health_dashboard_excludes_admin_test_email_failures(client, session_factory_gr):

@@ -13,10 +13,16 @@ from enum import StrEnum
 
 
 class NotificationKind(StrEnum):
-    """Channel-neutral category for a new-tender notice or a material update."""
+    """Channel-neutral category for a tender notification.
+
+    ``RAW_NOTICE`` is the v1.1 §5.6 failure path: Stage B could not produce a verdict, so the
+    tender is still reported — carrying the source notice and a clear "automatic assessment
+    unavailable" banner — rather than being silently dropped (docs/04 §4.2 row 7).
+    """
 
     NEW = "new"
     UPDATE = "update"
+    RAW_NOTICE = "raw_notice"
 
 
 @dataclass(frozen=True)
@@ -28,16 +34,23 @@ class NotificationEvent:
     repository does not persist a document diff; when omitted, the service conservatively
     carries the current tender document set and records that fact rather than guessing which
     files changed.
+
+    ``verdict_id`` is optional **only** for :attr:`NotificationKind.RAW_NOTICE`, which exists
+    precisely because no verdict exists. Every other kind still requires one, and the service
+    rejects a verdict-less event that is not a raw notice, so the relaxation cannot be used to
+    send a normal assessment mail with no assessment behind it.
     """
 
     tender_id: int
-    verdict_id: int
+    verdict_id: int | None = None
     kind: NotificationKind = NotificationKind.NEW
     material_change: bool = True
     change_types: tuple[str, ...] = ()
     change_details: tuple[tuple[str, str], ...] = ()
     changed_document_ids: tuple[int, ...] = ()
     correlation_id: str | None = None
+    #: Why the assessment is unavailable, surfaced verbatim in the raw-notice banner.
+    unavailability_reason: str | None = None
 
 
 @dataclass(frozen=True)

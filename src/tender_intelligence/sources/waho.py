@@ -104,7 +104,11 @@ DEFAULT_PARSER_CONFIG: Final[dict[str, Any]] = {
             r"(?:toutes les offres doivent(?: être| etre)? reçues? au plus tard\s+|at\s+|"
             r"le\s+)?"
             r"(?P<day>\d{1,2})\s+(?P<month>[A-Za-zÄÜÖäüöéèàçûê]+)\s+(?P<year>\d{4})"
-            r"(?:\s+(?:à|at)\s+(?P<hour>\d{1,2})\s*[.:h]\s*(?P<minute>\d{2})\s*(?P<ampm>[ap]\.?m\.?))?"
+            # The meridiem is optional: WAHO lists French deadlines in 24-hour form
+            # ("à 10 h 00 GMT"). Making it mandatory meant the whole time group could
+            # not match, the pattern then matched only up to the year, and the deadline
+            # was silently dropped instead of read.
+            r"(?:\s+(?:à|at)\s+(?P<hour>\d{1,2})\s*[.:h]\s*(?P<minute>\d{2})\s*(?P<ampm>[ap]\.?m\.?)?)?"
             r"\s*(?P<tz>[A-Z]{2,4})?"
         ),
         # Portuguese pattern
@@ -149,6 +153,13 @@ DEFAULT_PARSER_CONFIG: Final[dict[str, Any]] = {
         r"^#",
         r"^/tenders$",
         r"^/tenders/tenders/list",
+        # Cloudflare's bot-management endpoints. ``/cdn-cgi/l/email-protection`` is the
+        # script that de-obfuscates an email address, and it appears as an anchor *inside*
+        # whatever block the page happened to put it in — including an attachments block.
+        # Counting it as a tender document produced a bogus 404 fetch, a misleading
+        # "1 attachment" tally, and (because it was the only attachment) a verdict with no
+        # requirement sources. These are never tender documents on any site.
+        r"/cdn-cgi/",
     ],
     "reference_labels": ["reference", "référence", "referencia", "referência", "ref"],
     "procuring_body_labels": [
@@ -192,6 +203,32 @@ DEFAULT_PARSER_CONFIG: Final[dict[str, Any]] = {
         "profile",
     ],
     "advertised_size_pattern": r"(?P<size>[0-9]+(?:[.,][0-9]+)?)\s*(?P<unit>GB|MB|KB|Go|Mo|Ko)",
+    #: Deadlines stated as a *remaining duration* rather than a date, e.g. "5 days left".
+    #: Each pattern must expose a ``days`` group. Tried only after every absolute pattern has
+    #: failed, because a stated date is always the better evidence. See
+    #: :meth:`PaginatedHtmlAdapter._parse_relative_deadline` for the anchoring and the
+    #: provenance rules.
+    "relative_deadline_patterns": [
+        r"(?<![\d.])(?P<days>\d{1,4})(?![\d.])\s*(?:calendar\s+|business\s+)?days?\s*"
+        r"(?:left|remaining|to go|left to go)",
+        r"(?<![\d.])(?P<hours>\d{1,3})(?![\d.])\s*(?:hours?|hrs?)\s*(?:left|remaining)",
+    ],
+    #: Qualitative labels that signal a deadline exists but state no computable offset.
+    #: Recorded as ``deadline_raw`` so the gap is reported, but **never** converted into a date:
+    #: "Closing Soon" carries no number, and inventing one would be a fabricated deadline.
+    "unparsed_deadline_hints": [
+        r"closing\s+soon",
+        r"closes?\s+soon",
+        r"deadline\s+(?:soon|imminent)",
+        r"last\s+date\s+(?:soon|imminent)",
+    ],
+    #: Restricts the *relative* patterns to text inside these elements, for sites whose countdown
+    #: carries no "left"/"remaining" word (e.g. a bare ``<div class="opp-row-countdown">5 days
+    #: </div>``). Left unset, the relative patterns read the whole listing row — which is correct
+    #: for "5 days left" but unsafe for a bare "5 days", since that phrase also occurs in delivery
+    #: periods and contract terms. Scoping by selector is what keeps a loose number from being
+    #: read as a deadline; it is configuration, not code (PROJECT_RULES #10).
+    "relative_deadline_selector": None,
 }
 
 #: Timezone abbreviations that the source has been observed to state, mapped to UTC offsets.
@@ -473,11 +510,14 @@ class PaginatedHtmlAdapter(SourceAdapter):
         if not rows:
             return [], self._next_page_url(soup, response.final_url)
 
+        # One observation instant for the whole page, so every relative deadline on it is
+        # anchored to the same moment rather than drifting per row.
+        observed_at = datetime.now(UTC)
         listings: list[TenderListing] = []
         failed = 0
         for row in rows:
             try:
-                listing = self._extract_row(row, response.final_url)
+                listing = self._extract_row(row, response.final_url, observed_at=observed_at)
                 if listing is not None:
                     listings.append(listing)
                 else:
@@ -499,7 +539,9 @@ class PaginatedHtmlAdapter(SourceAdapter):
             )
         return [], self._next_page_url(soup, response.final_url)
 
-    def _extract_row(self, row: Tag, page_url: str) -> TenderListing | None:
+    def _extract_row(
+        self, row: Tag, page_url: str, *, observed_at: datetime | None = None
+    ) -> TenderListing | None:
         title_el = row.select_one(self._config["title_selector"])
         if title_el is None:
             return None
@@ -525,7 +567,11 @@ class PaginatedHtmlAdapter(SourceAdapter):
 
         card_text = row.get_text(" ", strip=True)
         published_at, published_raw = self._parse_published(card_text)
-        deadline_at, deadline_tz, deadline_raw = self._parse_deadline(card_text)
+        deadline_at, deadline_tz, deadline_raw = self._parse_deadline(
+            card_text,
+            now=observed_at,
+            relative_text=self._countdown_text(row),
+        )
 
         reference_selector = self._config.get("reference_selector")
         reference_element = row.select_one(reference_selector) if reference_selector else None
@@ -560,6 +606,24 @@ class PaginatedHtmlAdapter(SourceAdapter):
             identity_source="detail_href_pattern",
         )
 
+    def _countdown_text(self, row: Tag) -> str | None:
+        """Text of the configured countdown element, or ``None`` to read the whole row.
+
+        Scoping matters: a bare "5 days" appears in delivery periods and contract terms as well
+        as countdowns, so a site whose countdown lacks a "left"/"remaining" word must name the
+        element that carries it. Returning ``None`` (no selector configured) keeps the original
+        whole-row behaviour, which is correct when the phrase is self-describing.
+        """
+        selector = self._config.get("relative_deadline_selector")
+        if not selector:
+            return None
+        parts = [
+            " ".join(element.get_text(" ", strip=True).split())
+            for element in row.select(selector)
+        ]
+        text = " ".join(part for part in parts if part)
+        return text or None
+
     def _parse_published(self, card_text: str) -> tuple[datetime | None, str | None]:
         pattern = self._config["published_date_pattern"]
         match = re.search(pattern, card_text)
@@ -576,6 +640,94 @@ class PaginatedHtmlAdapter(SourceAdapter):
         return published, raw
 
     def _parse_deadline(
+        self,
+        card_text: str,
+        *,
+        now: datetime | None = None,
+        relative_text: str | None = None,
+    ) -> tuple[datetime | None, str | None, str | None]:
+        """Resolve a deadline from *card_text*, preferring stated absolute dates.
+
+        Falls back to a stated *remaining duration* ("5 days left") anchored at *now* — the
+        moment the page was fetched. *relative_text* restricts that fallback to text taken from
+        a configured countdown element; when it is ``None`` the whole row is read.
+
+        Returns ``(deadline_utc, tz_name, raw_text)`` where ``deadline_utc`` is ``None``
+        whenever no trustworthy instant can be produced.
+        """
+        resolved = self._parse_absolute_deadline(card_text)
+        if resolved[0] is not None or resolved[2] is not None:
+            return resolved
+        return self._parse_relative_deadline(
+            card_text if relative_text is None else relative_text,
+            now=now,
+            hints_text=card_text,
+        )
+
+    def _parse_relative_deadline(
+        self,
+        card_text: str,
+        *,
+        now: datetime | None = None,
+        hints_text: str | None = None,
+    ) -> tuple[datetime | None, str | None, str | None]:
+        """Anchor a stated remaining duration ("5 days left") to the fetch time.
+
+        Several portals state only a countdown. The offset is real information, so discarding it
+        loses a deadline the business can act on; but it is an *estimate*, not a stated instant,
+        so two things are done to keep it honest:
+
+        * The clock time of day is unknown, so the anchor is the moment of the fetch and the
+          result is labelled in ``deadline_raw`` as derived — it must never be mistaken for a
+          published deadline.
+        * ``timezone`` is reported as ``UTC`` because that is genuinely the anchor's zone. The
+          fetch instant is timezone-aware, so no naive timestamp is ever produced, which is the
+          rule docs/05 §5.2 sets.
+
+        A qualitative label ("Closing Soon") states no offset at all, so it is reported as raw
+        text with **no** datetime rather than guessed into one.
+        """
+        anchor = now or datetime.now(UTC)
+        if anchor.tzinfo is None:
+            anchor = anchor.replace(tzinfo=UTC)
+        anchor = anchor.astimezone(UTC)
+
+        for pattern in _selector_list(self._config.get("relative_deadline_patterns") or []):
+            match = re.search(pattern, card_text, re.IGNORECASE)
+            if match is None:
+                continue
+            groups = match.groupdict()
+            # Each pattern declares exactly one unit. Reading the group by name (rather than
+            # assuming days) is what keeps an hours countdown from being added as days.
+            unit_seconds: timedelta | None = None
+            if groups.get("days") is not None:
+                days = int(groups["days"])
+                if days > 3650:
+                    continue  # implausible; refuse rather than anchor a nonsense instant
+                unit_seconds = timedelta(days=days)
+            elif groups.get("hours") is not None:
+                hours = int(groups["hours"])
+                if hours > 24 * 365:
+                    continue
+                unit_seconds = timedelta(hours=hours)
+            if unit_seconds is None:
+                continue
+            return (
+                anchor + unit_seconds,
+                "UTC",
+                f"{match.group(0)} (derived from listing at {anchor.isoformat()}; "
+                f"approximate - the source states no exact deadline)",
+            )
+
+        for pattern in _selector_list(self._config.get("unparsed_deadline_hints") or []):
+            match = re.search(pattern, hints_text or card_text, re.IGNORECASE)
+            if match is not None:
+                # Recorded so the gap is visible; deliberately no datetime.
+                return None, None, match.group(0)
+
+        return None, None, None
+
+    def _parse_absolute_deadline(
         self,
         card_text: str,
     ) -> tuple[datetime | None, str | None, str | None]:
@@ -757,7 +909,7 @@ class PaginatedHtmlAdapter(SourceAdapter):
                 error_code=PARSER_MISMATCH,
                 context={"source_type": self.source_type},
             )
-        path = str(template).format(id=urllib.parse.quote(str(tender_id), safe=""))
+        path = str(template).format(id=urllib.parse.quote(str(tender_id), safe="/"))
         return urllib.parse.urljoin(self._base_url, path)
 
     def _parse_detail(self, response: HttpResponse, tender_id: str) -> TenderDetail:
@@ -784,7 +936,9 @@ class PaginatedHtmlAdapter(SourceAdapter):
         )
 
         published_at, published_raw = self._parse_published(full_text)
-        deadline_at, deadline_tz, deadline_raw = self._parse_deadline(full_text)
+        deadline_at, deadline_tz, deadline_raw = self._parse_deadline(
+            full_text, now=datetime.now(UTC)
+        )
 
         references = self._references(blocks, full_text)
         procuring_body = self._first_value(blocks, self._config["procuring_body_labels"])
@@ -812,6 +966,10 @@ class PaginatedHtmlAdapter(SourceAdapter):
             raw_metadata=raw_metadata,
         )
         attachments = self._parse_attachments(soup, response.final_url, tender_id)
+        # Visible page text, kept for the notice fallback. `body_text` is the label/value block
+        # the rest of the parsing is built on; `trix_text` adds the free-text description some
+        # tenders publish. Both are already plain text, so nothing downstream needs to parse HTML.
+        visible_text = " ".join(part for part in (body_text, trix_text) if part).strip() or None
         return TenderDetail(
             listing=listing,
             procuring_body=procuring_body,
@@ -819,6 +977,7 @@ class PaginatedHtmlAdapter(SourceAdapter):
             scope=scope,
             requirements_hints=requirements,
             attachments=attachments,
+            body_text=visible_text,
             raw_html=response.text,
         )
 

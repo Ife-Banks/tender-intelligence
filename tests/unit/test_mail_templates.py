@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from tender_intelligence.mail.templates import (
+    ASSESSMENT_UNAVAILABLE_BANNER,
+    NO_DOWNLOADABLE_SOURCES_BANNER,
     LinkedDocument,
     NotificationContent,
     NotificationKind,
@@ -174,6 +176,121 @@ class TestTextBody:
         assert render_text(_content()) == render_text(_content())
 
 
+class TestApplicabilityEvidence:
+    """docs/07 §7.2/§7.3: section 3 states why we can or cannot apply, per requirement.
+
+    Section 3 is the part a reader acts on. It previously rendered only the model's
+    standalone gap strings, so it carried no citation and no statement of whether the
+    company met anything - the notification gave the reader a verdict with nothing to
+    assess it against.
+    """
+
+    ASSESSMENTS = (
+        {
+            "requirement": "Minimum average annual turnover of 70,000,000",
+            "tender_evidence": (
+                {
+                    "document_id": 2,
+                    "location": "section:29",
+                    "quote": "Le chiffre d'affaires moyen annuel est de 70 000 000",
+                },
+            ),
+            "company_evidence": (
+                {
+                    "section": "Financial Capacity",
+                    "quote": "Audited average annual turnover of NGN 500,000,000.",
+                },
+            ),
+            "status": "met",
+            "assessment": "Audited turnover exceeds the threshold.",
+            "gap": None,
+        },
+        {
+            "requirement": "Bid guarantee of 1,500,000 from a recognised bank",
+            "tender_evidence": (
+                {
+                    "document_id": 2,
+                    "location": "section:23",
+                    "quote": "une garantie de soumission delivree par une banque reconnue",
+                },
+            ),
+            "company_evidence": (),
+            "status": "unverified",
+            "assessment": "No banking relationship is recorded.",
+            "gap": "No evidence on file for a bid guarantee facility.",
+        },
+    )
+
+    def _body(self, **overrides: object) -> str:
+        return render_text(
+            _content(requirements_summary=self.ASSESSMENTS, **overrides)
+        )
+
+    def test_section_three_cites_the_knowledge_base_for_every_met_claim(self) -> None:
+        body = self._body(gap_analysis=())
+        section = body.split("3. Why We Can / Cannot Apply", 1)[1]
+        assert 'Company evidence (KB "Financial Capacity")' in section
+        assert "Audited average annual turnover of NGN 500,000,000." in section
+
+    def test_section_three_reports_status_per_requirement(self) -> None:
+        section = self._body(gap_analysis=()).split("3. Why We Can / Cannot Apply", 1)[1]
+        assert "Minimum average annual turnover of 70,000,000 - Met" in section
+        assert "Unverified - no company evidence on file" in section
+
+    def test_section_three_carries_the_gap_and_the_reasoning(self) -> None:
+        section = self._body(gap_analysis=()).split("3. Why We Can / Cannot Apply", 1)[1]
+        assert "Assessment: No banking relationship is recorded." in section
+        assert "Gap: No evidence on file for a bid guarantee facility." in section
+
+    def test_section_two_quotes_the_tender_itself(self) -> None:
+        section = self._body(gap_analysis=()).split("2. Requirements for", 1)[1]
+        section = section.split("3. Why We Can", 1)[0]
+        assert "Minimum average annual turnover of 70,000,000" in section
+        assert "Le chiffre d'affaires moyen annuel est de 70 000 000" in section
+        # The company's own evidence belongs in section 3, not the tender's requirements.
+        assert "Audited average annual turnover" not in section
+
+    def test_gap_analysis_falls_back_when_no_assessments_are_available(self) -> None:
+        body = render_text(
+            _content(requirements_summary=(), gap_analysis=("We can supply both.",))
+        )
+        section = body.split("3. Why We Can / Cannot Apply", 1)[1]
+        assert "We can supply both." in section
+
+    def test_a_gap_is_not_repeated_when_the_assessment_already_states_it(self) -> None:
+        body = self._body(
+            gap_analysis=(
+                {"gap": "No evidence on file for a bid guarantee facility."},
+                {"gap": "No evidence on file for Portuguese-language capability."},
+            )
+        )
+        section = body.split("3. Why We Can / Cannot Apply", 1)[1]
+        assert section.count("No evidence on file for a bid guarantee facility.") == 1
+        # A gap the model reported without attaching it to a requirement is still shown.
+        assert "No evidence on file for Portuguese-language capability." in section
+
+    def test_html_section_three_escapes_evidence(self) -> None:
+        body = render_html(
+            _content(
+                requirements_summary=(
+                    {
+                        "requirement": "Scripted requirement",
+                        "company_evidence": (
+                            {"section": "Evidence", "quote": "a < b & c > d"},
+                        ),
+                        "status": "met",
+                        "assessment": "Met & exceeded",
+                        "gap": None,
+                    },
+                ),
+                gap_analysis=(),
+            )
+        )
+        assert "a &lt; b &amp; c &gt; d" in body
+        assert "Met &amp; exceeded" in body
+        assert "<script" not in body
+
+
 class TestHtmlBody:
     def test_escapes_and_sections(self) -> None:
         body = render_html(_content(background_summary="Raw & <b>bold</b> text"))
@@ -199,3 +316,65 @@ class TestHtmlBody:
 
     def test_deterministic(self) -> None:
         assert render_html(_content()) == render_html(_content())
+
+
+class TestNoticeOnlyAssessment:
+    """A verdict that exists but rests on a summary rather than on the tender document.
+
+    This is not the same as "assessment unavailable" and must not read as one: there is a
+    verdict here, and the reader needs to know what it rests on.
+    """
+
+    def _notice_only(self, **overrides: object) -> NotificationContent:
+        return _content(
+            notice_only_assessment=True,
+            incomplete_inputs=True,
+            confidence=0.65,
+            **overrides,
+        )
+
+    def test_banner_names_the_missing_files_in_text(self) -> None:
+        body = render_text(self._notice_only())
+        assert NO_DOWNLOADABLE_SOURCES_BANNER in body
+
+    def test_banner_names_the_missing_files_in_html(self) -> None:
+        assert NO_DOWNLOADABLE_SOURCES_BANNER in render_html(self._notice_only())
+
+    def test_the_caveat_says_the_confidence_was_reduced(self) -> None:
+        # The number looks lower than the model's own estimate, and the reader is entitled to
+        # know that is deliberate rather than the model's opinion.
+        body = render_text(self._notice_only())
+        assert "confidence" in body.casefold()
+
+    def test_the_banner_arrives_before_the_analysis(self) -> None:
+        # A reader who has reached Section 3 has begun trusting the reasoning; the caveat has
+        # to precede it, not follow it.
+        body = render_text(self._notice_only())
+        assert body.index(NO_DOWNLOADABLE_SOURCES_BANNER) < body.index("1. Background")
+
+    def test_the_notes_footer_repeats_it(self) -> None:
+        body = render_text(self._notice_only())
+        assert "no downloadable source files" in body.casefold()
+
+    def test_a_verdict_is_still_reported(self) -> None:
+        # The whole point: an assessment was made, so its verdict and confidence are shown.
+        body = render_text(self._notice_only())
+        assert "Final verdict: APPLY" in body
+        assert "65%" in body
+
+    def test_no_banner_when_a_document_was_assessed(self) -> None:
+        body = render_text(_content())
+        assert NO_DOWNLOADABLE_SOURCES_BANNER not in body
+
+    def test_no_banner_for_an_unavailable_assessment(self) -> None:
+        # The two states are distinct: one has a verdict on a weak basis, the other has none.
+        # Showing both banners at once would contradict itself.
+        body = render_text(
+            _content(notice_only_assessment=True, assessment_unavailable=True)
+        )
+        assert NO_DOWNLOADABLE_SOURCES_BANNER not in body
+        assert ASSESSMENT_UNAVAILABLE_BANNER in body
+
+    def test_rendering_is_deterministic(self) -> None:
+        assert render_text(self._notice_only()) == render_text(self._notice_only())
+        assert render_html(self._notice_only()) == render_html(self._notice_only())

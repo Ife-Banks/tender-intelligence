@@ -731,6 +731,21 @@ async function runAdminOperationStatus(correlationId) {
   } catch (error) { showMessage("error", errorMessage(error)); }
 }
 
+//: "Incomplete inputs" and "the source never offered a file" are different facts. An operator
+//: seeing the first can only wait; seeing the second knows to go and find the document. The
+//: wording matches the notification so a reader who has seen both is not told two stories.
+function inputCompletenessLabel(tender) {
+  if (tender.notice_only) return "No downloadable source files";
+  if (tender.incomplete_inputs === undefined) return "Not provided";
+  return tender.incomplete_inputs ? "Incomplete inputs" : "Complete inputs";
+}
+
+function inputCompleteness(tender) {
+  if (tender.notice_only) return pill("No downloadable source files", "warning");
+  if (tender.incomplete_inputs === undefined) return "Not provided";
+  return tender.incomplete_inputs ? pill("Incomplete inputs", "warning") : pill("Complete inputs", "success");
+}
+
 async function renderTenders() {
   const params = new URLSearchParams({ offset: String(state.offset), limit: String(state.pageSize) });
   for (const key of ["source_id", "status", "recommendation"]) if (state.filters[key]) params.set(key, state.filters[key]);
@@ -753,7 +768,7 @@ async function renderTenders() {
     tender.deadline?.state === "resolved" ? `${formatDate(tender.deadline.utc)} · ${tender.deadline.timezone || "timezone unavailable"}` : (tender.deadline?.state || "Unresolved"),
     tender.urgency ?? tender.verdict?.urgency ? pill("Urgent", "warning") : pill("Not urgent"),
     tender.verdict ? tender.verdict.recommendation : "No verdict returned",
-    tender.incomplete_inputs === undefined ? "Not provided" : tender.incomplete_inputs ? pill("Incomplete inputs", "warning") : pill("Complete inputs", "success"),
+    inputCompleteness(tender),
     tender.correlation_id || "Unavailable",
     button("Process Now", () => runAdminOperation({ kind: "tender", id: tender.id, label: tender.title }), "button button-primary button-small"),
   ]);
@@ -765,11 +780,7 @@ async function openTender(tenderId) {
   state.activeTenderId = tenderId;
   content.replaceChildren(loadingPanel("Loading persisted tender and timeline…"));
   try {
-    console.log(`[Admin UI] Opening tender ${tenderId}`);
     const [tender, timeline] = await Promise.all([api.get(`/tenders/${tenderId}`), api.get(`/tenders/${tenderId}/timeline`)]);
-    console.log(`[Admin UI] Tender data:`, tender);
-    console.log(`[Admin UI] Timeline data:`, timeline);
-    console.log(`[Admin UI] Tender verdict_status: ${tender.verdict_status}, verdict_error_code: ${tender.verdict_error_code}`);
     if (state.activeTenderId !== tenderId) return;
     const details = node("div", { class: "detail-grid" });
     for (const [label, value] of Object.entries({
@@ -784,22 +795,11 @@ async function openTender(tenderId) {
       "Source timezone": tender.deadline?.timezone,
       "Correlation ID": tender.correlation_id,
       "Urgency": tender.urgency ?? tender.verdict?.urgency ? "Urgent" : "Not urgent",
-      "Input completeness": tender.incomplete_inputs === undefined ? "Not provided" : tender.incomplete_inputs ? "Incomplete inputs" : "Complete inputs",
+      "Input completeness": inputCompletenessLabel(tender),
       "Verdict": tender.verdict?.recommendation || "Not available",
     })) details.append(node("div", { class: "detail-item" }, [node("span", { text: label }), node("strong", { text: value ?? "Unavailable" })]));
     const events = node("div", { class: "timeline" });
-    console.log(`[Admin UI] Processing ${timeline.events?.length || 0} timeline events`);
     for (const event of timeline.events || []) {
-      console.log(`[Admin UI] Timeline event:`, {
-        stage: event.stage,
-        status: event.status,
-        timestamp: event.timestamp,
-        tender_id: event.tender_id,
-        run_id: event.run_id,
-        correlation_id: event.correlation_id,
-        failure_code: event.failure_code,
-        processing_info: event.processing_info
-      });
       events.append(node("article", { class: "timeline-event" }, [
         node("div", { class: "timeline-line", "aria-hidden": "true" }, node("span", { class: "timeline-node" })),
         node("div", { class: "timeline-body" }, [node("strong", { text: `${event.stage} · ${event.status}` }), node("div", { class: "timeline-meta", text: `${formatDate(event.timestamp)} · tender ${event.tender_id ?? "—"} · run ${event.run_id ?? "—"} · correlation ${event.correlation_id || "—"}` }), event.failure_code && node("div", { class: "timeline-meta", text: `Failure: ${event.failure_code}` })]),
@@ -811,10 +811,7 @@ async function openTender(tenderId) {
     {
       const verdictBox = card("Verdict history", [loadingPanel("Loading verdict details…")]);
       detail.append(verdictBox);
-      console.log(`[Admin UI] Fetching verdicts for tender ${tenderId}`);
       api.get(`/tenders/${tenderId}/verdicts`).then((data) => {
-        console.log(`[Admin UI] Verdicts response:`, data);
-        console.log(`[Admin UI] Found ${data.items?.length || 0} verdict records`);
         if (state.activeTenderId !== tenderId) return;
         const rows = (data.items || []).map((v) => [v.id, v.recommendation, v.confidence ?? "Unavailable", v.urgency ? "Urgent" : "Not urgent", v.incomplete_inputs ? "Incomplete inputs" : "Complete inputs", formatDate(v.generated_at)]);
         verdictBox.lastChild.replaceWith(makeTable(["Verdict ID", "Recommendation", "Confidence", "Urgency", "Inputs", "Generated"], rows));
@@ -1091,7 +1088,7 @@ async function renderMail() {
     pill(provider.active ? "Active" : "Inactive", provider.active ? "success" : "warning"),
     jsonText(provider.capabilities, "Not exposed"),
     pill(provider.breaker_state || "Unavailable", provider.breaker_state === "closed" ? "success" : "warning"),
-    provider.credentials_configured === undefined ? "Hidden" : provider.credentials_configured ? "Set · write-only" : "Not set",
+    provider.credentials_set === undefined ? "Hidden" : provider.credentials_set ? "Set · write-only" : "Not set",
     node("div", { class: "table-actions" }, [
       button("Edit", () => editMailProvider(provider), "button button-quiet button-small"),
       button(provider.active ? "Disable" : "Enable", () => toggleMailProvider(provider), "button button-quiet button-small"),
@@ -1319,7 +1316,7 @@ async function boot() {
       ? "Configuration and records are read from the Admin API."
       : "Offline fixtures only · edits remain in memory and are discarded on refresh.";
     if (!state.live) {
-      for (const [value, label] of DEMO_SCENARIOS) scenarioSelect.append(node("option", { value }, label));
+      // Scenario options are already populated when the console is constructed.
       syncTestModeIndicator();
     } else {
       try {
@@ -1332,17 +1329,14 @@ async function boot() {
     }
     renderNavigation();
     await renderCurrentPage();
-  } catch {
-    state.live = false;
-    api = new FixtureAdminApi();
+  } catch (error) {
+    // A failure after a successful probe is an application error, not evidence that
+    // the server is unreachable. Never discard a healthy live session and substitute
+    // demo data: report the failure and leave the console on the live API.
     $("#connection-label").textContent = connectionLabel();
-    $("#demo-chip").hidden = false;
-    $("#demo-banner").hidden = false;
-    $("#scenario-control").hidden = false;
-    $("#footer-state").textContent = "Offline fixtures only · edits remain in memory and are discarded on refresh.";
-    for (const [value, label] of DEMO_SCENARIOS) scenarioSelect.append(node("option", { value }, label));
+    $("#footer-state").textContent = `The console could not render: ${error?.message ?? "unknown error"}`;
+    showMessage(`Could not load the console: ${error?.message ?? "unknown error"}`, "danger");
     renderNavigation();
-    await renderCurrentPage();
   }
 }
 

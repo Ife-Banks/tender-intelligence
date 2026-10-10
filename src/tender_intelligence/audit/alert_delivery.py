@@ -9,6 +9,7 @@ alert list via Prompt 11's notification infrastructure. It ensures:
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import sessionmaker
@@ -19,6 +20,19 @@ from tender_intelligence.db.models.recipients import Recipient
 
 if TYPE_CHECKING:
     pass  # Avoid circular import with NotificationService
+
+
+def _alert_dedupe_key(alert_type: str, message: str) -> str:
+    """Stable identity for an alert, used to suppress a repeat of the same alert.
+
+    The digest must be reproducible across processes. ``hash()`` is salted per
+    interpreter, so it yielded a different key on every worker restart and the unique
+    index never matched an earlier send - a single outage mailed a fresh copy of the
+    same alert each time the worker came back.
+    """
+
+    digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:32]
+    return f"alert:{alert_type}:{digest}"
 
 
 class AlertDeliveryAdapter(AlertDelivery):
@@ -73,8 +87,8 @@ class AlertDeliveryAdapter(AlertDelivery):
                 for r in dev_recipients
             ]
 
-            # Create dedupe key for this alert
-            dedupe_key = f"alert:{alert_type}:{hash(message)}"
+            # Build dedupe key for this alert.
+            dedupe_key = _alert_dedupe_key(alert_type, message)
 
             # Check if already sent
             existing = session.query(NotificationLog).filter(

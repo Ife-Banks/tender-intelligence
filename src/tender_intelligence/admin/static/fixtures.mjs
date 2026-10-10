@@ -4,7 +4,7 @@ const tender = {
   id: 204, title: "Solar mini-grid maintenance services", source_id: 1, source_name: "WAHO fixture",
   external_id: "WAHO-DEMO-204", status: "verdict_available", correlation_id: "demo-corr-204",
   first_seen_at: "2026-09-23T09:20:00Z", updated_at: now,
-  deadline: { state: "resolved", utc: "2026-10-03T16:00:00Z", timezone: "Africa/Abidjan" },
+  deadline: { state: "resolved", source: "detail_page", utc: "2026-10-03T16:00:00Z", timezone: "Africa/Abidjan" },
   verdict: { recommendation: "APPLY WITH CONDITIONS", urgency: true, incomplete_inputs: false },
   url: "https://example.invalid/not-a-real-notice",
 };
@@ -72,14 +72,14 @@ export const FIXTURE_DATA = {
     { id: 3, email: "reviewer-demo@example.test", name: "Tender Reviewer Demo", role: "Tender reviewer", list_type: "tender", delivery: "cc", receives_filter: "urgent", active: true },
   ] },
   "/mail/providers": { items: [
-    { id: 1, name: "Sendlib fixture", provider_type: "sendlib", priority: 1, active: true, capabilities: { html: true, attachments: true }, breaker_state: "open", credentials_configured: true, from_address: "not-a-real-sender@example.test", reply_to: "" },
-    { id: 2, name: "SMTP fallback fixture", provider_type: "smtp", priority: 2, active: true, capabilities: { html: true, attachments: false }, breaker_state: "closed", credentials_configured: false, from_address: "not-a-real-sender@example.test", reply_to: "" },
+    { id: 1, name: "Sendlib fixture", provider_type: "sendlib", priority: 1, active: true, capabilities: { html: true, attachments: true }, breaker_state: "open", credentials_set: true, from_address: "not-a-real-sender@example.test", reply_to: "" },
+    { id: 2, name: "SMTP fallback fixture", provider_type: "smtp", priority: 2, active: true, capabilities: { html: true, attachments: false }, breaker_state: "closed", credentials_set: false, from_address: "not-a-real-sender@example.test", reply_to: "" },
   ] },
   "/triage": { include_keywords: ["solar", "health"], exclude_keywords: ["weapons"], sectors: null, regions: null, minimum_contract_value: null, relevance_threshold: null, urgency_window_days: 10 },
   "/settings": { test_mode: true, updated_at: now, version: 4, monthly_ai_budget: null, retention_months: 12, link_expiry_days: 14, alert_thresholds: { kb_token_warning_share: 0.4 } },
   "/audit": { items: [
-    { id: 90, created_at: "2026-09-24T11:00:00Z", actor: "demo.admin", entity: "KnowledgeBaseVersion", entity_id: 8, action: "created", category: "configuration", result: "success", correlation_id: "demo-config-90", changed_fields: ["content_hash", "note"] },
-    { id: 89, created_at: "2026-09-20T10:00:00Z", actor: "demo.admin", entity: "Setting", entity_id: 1, action: "updated", category: "configuration", result: "success", correlation_id: "demo-config-89", changed_fields: ["retention_months"] },
+    { id: 90, created_at: "2026-09-24T11:00:00Z", actor: "demo.admin", entity: "KnowledgeBaseVersion", entity_id: 8, action: "created", category: "configuration", result: "success", correlation_id: "demo-config-90", changed_fields: { content_hash: "sha256:...", note: "OPEX KB revision 8" } },
+    { id: 89, created_at: "2026-09-20T10:00:00Z", actor: "demo.admin", entity: "Setting", entity_id: 1, action: "updated", category: "configuration", result: "success", correlation_id: "demo-config-89", changed_fields: { retention_months: { from: 24, to: 36 } } },
   ], pagination: { total: 2, offset: 0, limit: 20 } },
 };
 
