@@ -214,6 +214,7 @@ async def _scheduled_source_loop(app: FastAPI, poll_seconds: int) -> None:
                     )
                 finally:
                     active_run = None
+            await _flush_mail_outbox(app)
             await asyncio.sleep(poll_seconds)
     except asyncio.CancelledError:
         if active_run is not None:
@@ -221,6 +222,27 @@ async def _scheduled_source_loop(app: FastAPI, poll_seconds: int) -> None:
             with contextlib.suppress(Exception):
                 await asyncio.shield(active_run)
         raise
+
+
+async def _flush_mail_outbox(app: FastAPI) -> None:
+    """Drain pending mail retries on every scheduler tick (prompt 11 §36).
+
+    Pending outbox rows recover on the same cadence as scheduled crawls, so a provider
+    outage or restart never turns into silent, permanent non-delivery. The drain is a side
+    channel, not a scheduled run: a failure is logged and never ends the scheduler loop.
+    """
+    service = getattr(app.state, "notification_service", None)
+    if service is None or not hasattr(service, "flush_pending_retry"):
+        return
+    try:
+        await asyncio.to_thread(service.flush_pending_retry)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - one bad flush must not end the scheduler loop
+        _scheduler_log.exception(
+            "mail outbox flush failed",
+            extra={"stage": "scheduler", "status": "error"},
+        )
 
 
 def _validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:

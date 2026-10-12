@@ -1303,12 +1303,41 @@ class NotificationService:
 
     # ------------------------------------------------------------------ outbox retry
 
+    def _outbox_route(
+        self,
+        session: Session,
+        tender: Tender,
+        verdict: Verdict | None,
+        raw_notice: bool,
+        test_mode: bool,
+    ) -> RecipientSelection:
+        """Route an outbox row at flush time.
+
+        A RAW_NOTICE has no verdict, so it goes to the dev list unconditionally (v1.1 §5.6);
+        every other kind routes on the persisted verdict, mirroring the live prepare path.
+        """
+        router = RecipientRouter(session)
+        if raw_notice:
+            return router.resolve_raw_notice()
+        return router.resolve(
+            source_name=tender.source.name,
+            recommendation=verdict.recommendation,  # type: ignore[union-attr]
+            urgency_flag=verdict.urgency_flag,  # type: ignore[union-attr]
+            test_mode=test_mode,
+            source_scope=tender.source.recipient_scope,
+        )
+
     def _flush_claimed(self, log_id: int, claim_token: str) -> bool:
         with self._session() as session:
             row = NotificationRepository(session).get_for_update(log_id)
             if row is None or row.claim_token != claim_token:
                 return False
-            if row.tender_id is None or row.verdict_id is None:
+            # A RAW_NOTICE row is verdict-less by design (v1.1 §5.6): Stage B produced no
+            # verdict yet the tender must still be reported, so ``verdict_id`` is legitimately
+            # NULL. Only true assessment rows (every other kind) must carry a verdict — those
+            # still fail loudly rather than silently mailing an unassessed claim.
+            raw_notice = row.notification_kind == templates.NotificationKind.RAW_NOTICE.value
+            if row.tender_id is None or (row.verdict_id is None and not raw_notice):
                 NotificationRepository(session).keep_pending(
                     log_id,
                     error_code=NOTIFICATION_ROUTING_FAILED,
@@ -1317,8 +1346,8 @@ class NotificationService:
                 )
                 return False
             tender = session.get(Tender, row.tender_id)
-            verdict = session.get(Verdict, row.verdict_id)
-            if tender is None or verdict is None:
+            verdict = session.get(Verdict, row.verdict_id) if not raw_notice else None
+            if tender is None or (verdict is None and not raw_notice):
                 NotificationRepository(session).keep_pending(
                     log_id,
                     error_code=PERSISTENCE_NOT_FOUND,
@@ -1331,13 +1360,7 @@ class NotificationService:
             selection = _selection_from_snapshot(row.recipients_snapshot or [])
             if test_mode and "tender" in selection.list_types:
                 try:
-                    selection = RecipientRouter(session).resolve(
-                        source_name=tender.source.name,
-                        recommendation=verdict.recommendation,
-                        urgency_flag=verdict.urgency_flag,
-                        test_mode=True,
-                        source_scope=tender.source.recipient_scope,
-                    )
+                    selection = self._outbox_route(session, tender, verdict, raw_notice, test_mode=True)
                     row.recipients_snapshot = list(selection.snapshot)
                 except RoutingError:
                     NotificationRepository(session).keep_pending(
@@ -1349,13 +1372,7 @@ class NotificationService:
                     return False
             if not selection.addresses:
                 try:
-                    selection = RecipientRouter(session).resolve(
-                        source_name=tender.source.name,
-                        recommendation=verdict.recommendation,
-                        urgency_flag=verdict.urgency_flag,
-                        test_mode=test_mode,
-                        source_scope=tender.source.recipient_scope,
-                    )
+                    selection = self._outbox_route(session, tender, verdict, raw_notice, test_mode=test_mode)
                     row.recipients_snapshot = list(selection.snapshot)
                 except RoutingError:
                     selection = RecipientSelection()
@@ -1531,7 +1548,7 @@ class NotificationService:
         session: Session,
         row: NotificationLog,
         tender: Tender,
-        verdict: Verdict,
+        verdict: Verdict | None,
         selection: RecipientSelection,
         test_mode: bool,
     ) -> EmailMessage | None:

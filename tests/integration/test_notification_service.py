@@ -642,6 +642,42 @@ class TestRawNoticeWhenAssessmentUnavailable:
         with world.session_factory() as session:
             assert len(_logs(session)) == 1
 
+    def test_raw_notice_outbox_recovers_after_chain_down(self, world) -> None:
+        """A verdict-less RAW_NOTICE row must not dead-letter in the outbox flush (C6).
+
+        Old behaviour: ``_flush_claimed`` rejected any row with ``verdict_id IS NULL`` as "no
+        tender/verdict identity", so a pending RAW_NOTICE could never be retried — after a
+        provider outage the tender's failure notice stayed ``pending_retry`` forever even
+        once the provider recovered. The flush must treat a RAW_NOTICE's missing verdict as
+        legitimate (v1.1 §5.6) and re-deliver it to the dev list.
+        """
+        world.add_dev("dev@opex.example")
+        _, tender, _, _ = world.seed_tender(with_verdict=False)
+        world.add_provider(name="sendlib-one")
+        handler = _Handler(500)
+        service = world.service(handler)
+
+        outcome = service.notify_tender(tender.id, event=self._event(tender))
+
+        assert outcome.status == "pending_retry"
+        assert outcome.error_code == MAIL_HTTP_5XX
+        with world.session_factory() as session:
+            log = _logs(session)[0]
+            assert log.status == "pending_retry"
+            assert log.verdict_id is None, "a raw notice must not claim a verdict"
+
+        # The provider recovers; the durable outbox flush delivers the verdict-less notice.
+        handler.status = 200
+        summary = service.flush_pending_retry()
+
+        assert summary.attempted == 1
+        assert summary.flushed == 1
+        assert summary.still_pending == 0
+        with world.session_factory() as session:
+            log = _logs(session)[0]
+            assert log.status == "sent"
+            assert log.verdict_id is None
+
     def test_normal_kind_still_refuses_to_send_without_a_verdict(self, world) -> None:
         """Relaxing ``verdict_id`` must not let an assessment mail go out with no assessment."""
         world.add_dev("dev@opex.example")

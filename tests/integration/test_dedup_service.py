@@ -446,3 +446,36 @@ def test_outcomes_carry_description_and_raw_metadata_is_merged(
     with session_factory_gr() as session:
         rows = _tender_rows(session, source_id)
         assert rows[0].raw_metadata["reference"] == "REF-1"
+
+
+@pytest.mark.parametrize("terminal_status", ["verdict_failed", "expired"])
+def test_terminal_tender_material_change_is_skipped_not_errored(
+    session_factory_gr: sessionmaker, source_id: int, terminal_status: str
+) -> None:
+    """A terminal tender's changed listing must not brick the whole dedup run (C1).
+
+    Old behaviour: ``apply_update`` forced status→"updated", the transition matrix rejected
+    the move out of the terminal status, and the whole dedup transaction rolled back — so
+    every crawl of the source errored until someone intervened. A material change on a
+    terminal tender is now acknowledged and skipped, and the run completes.
+    """
+    service = DedupService(session_factory_gr)
+    service.run(source_id, [_listing()])  # seen row at status="new"
+
+    with session_factory_gr() as session:
+        tender = session.scalar(select(Tender).where(Tender.external_id == "WAHO-1"))
+        assert tender is not None
+        tender.status = terminal_status
+        session.commit()
+
+    result = service.run(source_id, [_listing(title="Senior Health Officer v2")])
+
+    assert result.run_status == COMPLETED
+    assert result.new_count == 0
+    assert result.update_count == 0
+    assert result.unchanged_count == 1
+    with session_factory_gr() as session:
+        rows = _tender_rows(session, source_id)
+        assert len(rows) == 1
+        assert rows[0].status == terminal_status  # dead end preserved
+        assert rows[0].title == "Senior Health Officer"  # listing change not applied

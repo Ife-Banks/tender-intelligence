@@ -46,6 +46,7 @@ from tender_intelligence.interfaces.llm import (
     LLMResponse,
     LLMUsage,
 )
+from tender_intelligence.orchestrator.errors import SourceNotRunnableError
 from tender_intelligence.orchestrator.retry import RetryPolicy
 from tender_intelligence.orchestrator.stages import StageExecution, StageReport, StageRunner
 from tender_intelligence.orchestrator.status import (
@@ -54,6 +55,7 @@ from tender_intelligence.orchestrator.status import (
     StageNumber,
     StageStatus,
 )
+from tender_intelligence.orchestrator.worker import Worker
 from tender_intelligence.storage.interface import StoredObject
 
 
@@ -309,6 +311,91 @@ def test_process_now_reuses_persisted_tender_without_listing_or_dedup_writes(
     with session_factory_gr() as session:
         timeline = TimelineService(session).reconstruct_by_tender(tender.id)
     assert report.run_history_id in (timeline.run_ids or [])
+
+
+def test_process_now_rejects_terminal_tender(session_factory_gr, tmp_path):
+    """A manual Process Now on a terminal tender fails fast (C1).
+
+    Old behaviour: the re-run drove the whole triage/verdict pipeline against a
+    verdict_failed / expired tender, then failed the terminal→processed transition at the
+    end — wasting a full LLM run for a tender that can never be bidded on (docs/13 O21).
+    """
+    harness = build_harness(session_factory_gr, tmp_path, ocr=StubOcrEngine())
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+    harness.coordinator.run_source(source_id)
+    with session_factory_gr() as session:
+        tender = session.scalar(
+            select(Tender).where(Tender.source_id == source_id).order_by(Tender.id)
+        )
+        assert tender is not None
+        tender.status = "verdict_failed"  # terminal: set as the pipeline would after a verdict failure
+        session.commit()
+        tender_id = int(tender.id)
+
+    with pytest.raises(SourceNotRunnableError):
+        harness.coordinator.run_existing_tender(tender_id)
+
+
+def test_worker_pass_drains_outbox_after_run(session_factory_gr, tmp_path):
+    """The worker drains the mail outbox after every non-dry-run pass (C5).
+
+    Without this, ``pending_retry`` rows left by a provider outage or worker restart were
+    only retried by hand — the durable outbox's fail-loud guarantee (prompt 11 §36) had no
+    automatic recovery on the crawl cadence.
+    """
+    harness = build_harness(session_factory_gr, tmp_path, ocr=StubOcrEngine())
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+    flushed: list[str] = []
+    worker = Worker(
+        coordinator=harness.coordinator,
+        scheduler=harness.scheduler,
+        retry_flusher=lambda: flushed.append("flushed"),
+    )
+
+    report = worker.run_once(source_ids=[source_id])
+
+    assert report.succeeded
+    assert flushed == ["flushed"]
+
+
+def test_worker_pass_dry_run_does_not_flush_outbox(session_factory_gr, tmp_path):
+    """A read-only pass is read-only: it must not claim or deliver mail (C5)."""
+    harness = build_harness(session_factory_gr, tmp_path, ocr=StubOcrEngine())
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+    flushed: list[str] = []
+    worker = Worker(
+        coordinator=harness.coordinator,
+        scheduler=harness.scheduler,
+        retry_flusher=lambda: flushed.append("flushed"),
+    )
+
+    worker.run_once(source_ids=[source_id], dry_run=True)
+
+    assert flushed == []
+
+
+def test_worker_pass_survives_outbox_flush_failure(session_factory_gr, tmp_path):
+    """A failed outbox drain must not fail the crawl work already completed (C5)."""
+    harness = build_harness(session_factory_gr, tmp_path, ocr=StubOcrEngine())
+    source_id = harness.seed_source()
+    harness.ensure_settings()
+
+    def boom() -> None:
+        raise RuntimeError("mail provider unreachable")
+
+    worker = Worker(
+        coordinator=harness.coordinator,
+        scheduler=harness.scheduler,
+        retry_flusher=boom,
+    )
+
+    report = worker.run_once(source_ids=[source_id])
+
+    assert report.succeeded
+    assert report.failed == 0
 
 
 def test_triage_handoff_only_receives_pass_and_records_run_link(session_factory_gr, tmp_path):

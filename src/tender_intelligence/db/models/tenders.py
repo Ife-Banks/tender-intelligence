@@ -61,7 +61,9 @@ class Tender(Base, TimestampMixin):
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deadline_timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     raw_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    status: Mapped[str] = mapped_column(String(24), nullable=False, default="new", index=True)
+    # 32 chars fits every status: the longest value is "awaiting_approved_provider" (26),
+    # which used to overflow the original String(24) column on PostgreSQL (migration 0019).
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="new", index=True)
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.now
     )

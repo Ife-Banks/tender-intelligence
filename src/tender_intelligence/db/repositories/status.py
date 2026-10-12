@@ -45,6 +45,15 @@ TENDER_TRANSITION_MATRIX: Final[dict[str, frozenset[str]]] = {
     "expired": frozenset({"expired"}),
 }
 
+#: Statuses that are dead ends — the transition matrix gives them no outgoing edge except
+#: to themselves, so a tender in one must never re-enter the pipeline (docs/13 O21).
+#: Derived from the matrix so the two definitions can never drift apart.
+TERMINAL_STATUSES: Final[frozenset[str]] = frozenset(
+    status
+    for status, allowed in TENDER_TRANSITION_MATRIX.items()
+    if allowed == frozenset({status})
+)
+
 
 def assert_valid_tender_status(value: str, *, entity_id: int | None = None) -> None:
     if value not in TENDER_STATUSES:

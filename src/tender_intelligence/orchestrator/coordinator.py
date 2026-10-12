@@ -83,6 +83,7 @@ from tender_intelligence.db.repositories import (
     SourceRepository,
     TenderRepository,
 )
+from tender_intelligence.db.repositories.status import TERMINAL_STATUSES
 from tender_intelligence.deadline.model import RESOLVED as DEADLINE_RESOLVED
 from tender_intelligence.deadline.service import DeadlineResolutionService
 from tender_intelligence.dedup.service import DedupResult, DedupService
@@ -312,6 +313,15 @@ class RunCoordinator:
             tender = TenderRepository(session).get(tender_id)
             if tender is None:
                 raise SourceNotRunnableError("unknown tender", context={"tender_id": tender_id})
+            if tender.status in TERMINAL_STATUSES:
+                # A dead-end tender (verdict_failed / expired, docs/13 O21) must not be
+                # re-driven: re-processing cannot produce a biddable outcome and the verdict
+                # stage would fail the terminal→processed transition anyway. Fail fast so a
+                # manual Process Now cannot waste a full triage/verdict LLM run.
+                raise SourceNotRunnableError(
+                    "tender is terminal and cannot be re-run",
+                    context={"tender_id": tender_id, "status": tender.status},
+                )
             source_id = int(tender.source_id)
             item = TenderWorkItem(
                 tender_id=int(tender.id),

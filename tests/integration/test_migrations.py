@@ -83,6 +83,19 @@ class TestMigration:
         assert any("legacy-duplicate:" in key for key in rows)
         assert any(index.get("unique") for index in indexes)
 
+    def test_tender_status_column_wide_enough_for_longest_status(self, sqlite_engine):
+        # C2: "awaiting_approved_provider" is 26 characters — it used to overflow the
+        # String(24) column created in migration 0001 on PostgreSQL. SQLite ignores VARCHAR
+        # length, so the bug was masked in tests while the production target (Neon/Postgres)
+        # crashed. Migration 0019 widens the column to String(32); assert both the migrated
+        # column and the ORM model agree.
+        columns = {column["name"]: column for column in inspect(sqlite_engine).get_columns("tenders")}
+        assert columns["status"]["type"].length == 32
+
+        from tender_intelligence.db.models.tenders import Tender
+
+        assert Tender.__table__.c.status.type.length == 32
+
     def test_downgrade_upgrade_roundtrip(self, tmp_path):
         import os
 

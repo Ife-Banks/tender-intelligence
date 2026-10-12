@@ -44,6 +44,7 @@ from tender_intelligence.db.repositories import (
     SourceRepository,
     TenderRepository,
 )
+from tender_intelligence.db.repositories.status import TERMINAL_STATUSES
 from tender_intelligence.dedup.classify import (
     NEW,
     UNCHANGED,
@@ -454,6 +455,33 @@ class DedupService:
     ) -> DedupOutcome:
         comparison: Comparison = compare(listing, tender, self._policy)
         if comparison.classification == UNCHANGED:
+            return DedupOutcome(
+                classification=UNCHANGED,
+                listing=listing,
+                tender_id=tender.id,
+                correlation_id=tender.correlation_id,
+                material_change=False,
+            )
+
+        # A terminal tender (verdict_failed / expired, docs/13 O21) must never re-enter the
+        # pipeline. apply_update() would force status→"updated", which the transition matrix
+        # forbids from a terminal status — raising PERSISTENCE_INVALID_STATUS_TRANSITION and
+        # rolling back the whole dedup transaction, bricking this source on every crawl.
+        # Log and skip: the listing change is acknowledged but the tender stays terminal.
+        if tender.status in TERMINAL_STATUSES:
+            log.warning(
+                "listing changed but tender %s is terminal (%s); update skipped",
+                tender.external_id,
+                tender.status,
+                extra={
+                    "stage": self.STAGE,
+                    "status": "skipped_terminal",
+                    "correlation_id": get_correlation_id(),
+                    "external_id": tender.external_id,
+                    "tender_id": tender.id,
+                    "change_types": comparison.change_types,
+                },
+            )
             return DedupOutcome(
                 classification=UNCHANGED,
                 listing=listing,

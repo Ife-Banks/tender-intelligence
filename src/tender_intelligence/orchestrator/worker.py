@@ -7,7 +7,8 @@ is exactly — and only — what :meth:`Worker.run_once` does.
 There is no scheduler here of its own: due-ness is :class:`SourceScheduler`'s decision, and
 each run's lifecycle is :class:`RunCoordinator`'s. This class owns the *iteration and the
 isolation between iterations*, nothing else (prompt 10 §21: do not create a second scheduler;
-do not create a second persistence layer).
+do not create a second persistence layer). When a ``retry_flusher`` is injected it also drains
+the mail outbox after each pass (prompt 11 §36) — a drain, never part of the pass's result.
 
 Isolation is enforced at the loop, not trusted to the coordinator: ``run_source`` is wrapped
 so that even a failure the coordinator did not contain — an unknown source id, an unreadable
@@ -22,7 +23,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from tender_intelligence.core.correlation import correlation_context, new_correlation_id
+from tender_intelligence.core.correlation import (
+    correlation_context,
+    get_correlation_id,
+    new_correlation_id,
+)
 from tender_intelligence.core.errors import SOURCE_NOT_RUNNABLE, STAGE_FAILED
 from tender_intelligence.orchestrator.coordinator import RunCoordinator
 from tender_intelligence.orchestrator.scheduler import SourceScheduler, SourceSpec
@@ -90,10 +95,15 @@ class Worker:
         coordinator: RunCoordinator,
         scheduler: SourceScheduler,
         clock: Callable[[], datetime] | None = None,
+        retry_flusher: Callable[[], object] | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._scheduler = scheduler
         self._clock = clock or (lambda: datetime.now(UTC))
+        #: Optional outbox drain: called after every non-dry-run pass so "pending_retry" mail
+        #: rows left by a provider outage or worker restart recover on the same cadence as
+        #: source crawls (prompt 11 §36). When not provided the pass is purely crawl work.
+        self._retry_flusher = retry_flusher
 
     def run_once(
         self,
@@ -135,6 +145,8 @@ class Worker:
                     # A source that could not be started is a per-source failure, never a
                     # worker failure: the next source must still run (prompt 10 §15).
                     failures.append(self._failure(spec, exc))
+            if not dry_run:
+                self._flush_outbox(pass_cid)
 
         ended_at = self._clock()
         report = WorkerReport(
@@ -223,4 +235,39 @@ class Worker:
             source_name=spec.name,
             error_code=str(code),
             message=str(message),
+        )
+
+    def _flush_outbox(self, pass_cid: str) -> None:
+        """Drain the durable mail outbox after the pass (prompt 11 §36).
+
+        Rows left ``pending_retry`` by a provider outage or worker restart must recover on the
+        same cadence as source crawls, otherwise the fail-loud guarantee is lost: a tender
+        that could not be mailed would stay unflushed indefinitely and silently. The flush is
+        a drain, not part of this pass, so a flush failure is logged and never allowed to fail
+        the crawl work already completed.
+        """
+        if self._retry_flusher is None:
+            return
+        try:
+            summary = self._retry_flusher()
+        except Exception:  # noqa: BLE001 - the flusher's isolation boundary
+            log.exception(
+                "mail outbox flush failed after worker pass",
+                extra={
+                    "stage": "worker",
+                    "status": "error",
+                    "correlation_id": get_correlation_id() or pass_cid,
+                },
+            )
+            return
+        log.info(
+            "mail outbox flushed after worker pass",
+            extra={
+                "stage": "worker",
+                "status": "flushed",
+                "correlation_id": get_correlation_id() or pass_cid,
+                "attempted": getattr(summary, "attempted", None),
+                "flushed": getattr(summary, "flushed", None),
+                "still_pending": getattr(summary, "still_pending", None),
+            },
         )

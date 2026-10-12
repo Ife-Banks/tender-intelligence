@@ -125,6 +125,11 @@ def build_pipeline(
         )
         return effective_llm_factory(profile=profile, api_key=api_key)
 
+    notification_service = NotificationService(
+        sessions,
+        storage=storage,
+        link_base_url=runtime_settings.link_base_url,
+    )
     coordinator = RunCoordinator(
         session_factory=sessions,
         registry=adapter_registry,
@@ -151,16 +156,17 @@ def build_pipeline(
             sessions, storage, _profile_client_factory(effective_llm_factory)
         ),
         notification_dispatcher=NotificationDispatcher(
-            EmailNotificationChannel(
-                NotificationService(
-                    sessions,
-                    storage=storage,
-                    link_base_url=runtime_settings.link_base_url,
-                )
-            )
+            EmailNotificationChannel(notification_service)
         ),
     )
-    worker = Worker(coordinator=coordinator, scheduler=SourceScheduler(sessions))
+    worker = Worker(
+        coordinator=coordinator,
+        scheduler=SourceScheduler(sessions),
+        # The worker drains the durable mail outbox after each pass, so "pending_retry" rows
+        # left by a provider outage or restart recover on the same cadence as source crawls
+        # (prompt 11 §36). The dispatcher and the flusher share one service instance.
+        retry_flusher=notification_service.flush_pending_retry,
+    )
     return coordinator, worker, discovery_client, fetcher, adapter_registry
 
 

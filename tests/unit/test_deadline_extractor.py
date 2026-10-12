@@ -132,3 +132,51 @@ class TestExtractDeadlineFromText:
         # Should find September 24 from the Deadline label
         assert r.deadline_utc.month == 9
         assert r.deadline_utc.day == 24
+
+    # ── ISO machine timestamps ────────────────────────────────────────────────
+    def test_iso_timestamp_after_label_resolves(self):
+        r = _extract("Deadline for submission: 2026-09-24 13:00:00 UTC")
+        assert r is not None
+        assert r.status == RESOLVED
+        assert r.deadline_utc == datetime(2026, 9, 24, 13, 0, tzinfo=UTC)
+
+    def test_iso_gmt_after_label_resolves(self):
+        r = _extract("Deadline for submission: 2026-09-24 13:00:00 GMT")
+        assert r is not None
+        assert r.status == RESOLVED
+        assert r.deadline_utc == datetime(2026, 9, 24, 13, 0, tzinfo=UTC)
+
+    def test_iso_without_timezone_never_fabricated_as_utc(self):
+        # No explicit zone — must NOT resolve as UTC (generic extractor serves sources
+        # that publish local timestamps). Label was found ⇒ UNRESOLVED, never RESOLVED.
+        r = _extract("Deadline for submission: 2026-09-24 13:00:00")
+        assert r is not None
+        assert not r.is_resolved
+        assert r.status == UNRESOLVED
+
+    def test_iso_unrecognised_timezone_never_fabricated_as_utc(self):
+        # "EST" is not a known offset here; must not silently become UTC.
+        r = _extract("Deadline for submission: 2026-09-24 13:00:00 EST")
+        assert r is not None
+        assert not r.is_resolved
+        assert r.status == UNRESOLVED
+
+    def test_iso_scan_is_anchored_to_label(self):
+        # Old behaviour searched the whole window and could pick the first ISO — here
+        # the earlier "opens" date. The timestamp must immediately follow the label.
+        r = _extract(
+            "Deadline: opens 2026-03-01 09:00 UTC, closes 2026-04-15 17:00 UTC."
+        )
+        assert r is not None
+        assert not r.is_resolved
+        assert r.status == UNRESOLVED
+
+    def test_iso_ignores_secondary_dates_in_window(self):
+        r = _extract(
+            "Deadline for submission: 2026-09-24 13:00:00 UTC\n"
+            "Tender opens on 2026-09-01 09:00 UTC."
+        )
+        assert r is not None
+        assert r.status == RESOLVED
+        assert r.deadline_utc.month == 9
+        assert r.deadline_utc.day == 24

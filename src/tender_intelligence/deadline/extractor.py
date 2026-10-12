@@ -9,7 +9,9 @@ No raw document body is stored or logged.
 
 Design: prefers explicit submission-deadline language over any other dates in the text,
 across EN / FR / PT.  Never guesses — if no clear match is found, returns None so the
-caller can fall through to UNRESOLVED.
+caller can fall through to UNRESOLVED.  A timestamp without an explicit timezone is never
+resolved: this generic extractor must not assume UTC for sources that publish local times
+(only the WAHO *adapter* may rely on its own source-specific UTC convention).
 """
 
 from __future__ import annotations
@@ -118,8 +120,20 @@ _FRENCH_HHMM_RE: Final[re.Pattern[str]] = re.compile(
 
 
 def _parse_iso(text: str) -> tuple[datetime | None, str | None]:
-    """Try to parse an ISO-style timestamp from *text*.  Returns (utc_dt, tz_str)."""
-    m = _ISO_DATETIME_RE.search(text)
+    """Try to parse an ISO-style timestamp from *text*.  Returns (utc_dt, tz_str).
+
+    Two guards keep the result honest (Prompt 12.1 / prompt 07 timezone rule):
+
+    * **Anchored match** — the timestamp must begin *text* (i.e. immediately follow the
+      deadline label).  Searching the whole 250-character window lets an unrelated
+      earlier date (an "opens" date, a publication date) be picked as the deadline.
+    * **Explicit timezone required** — ``2026-09-24 13:00:00`` without a recognised zone
+      is never assumed to be UTC.  This generic extractor serves EN/FR/PT sources that
+      may publish local timestamps; defaulting to UTC would fabricate a canonical
+      deadline.  Returns ``(None, None)`` so the caller falls through to the textual
+      parser and then to UNRESOLVED.
+    """
+    m = _ISO_DATETIME_RE.match(text)
     if not m:
         return None, None
     try:
@@ -132,9 +146,9 @@ def _parse_iso(text: str) -> tuple[datetime | None, str | None]:
     tz_str = (m.group("tz") or "").upper().replace("Z", "UTC")
     tz = _TZ_OFFSETS.get(tz_str)
     if tz is None:
-        # Default UTC for the machine-readable field — WAHO always publishes UTC
-        tz = UTC
-        tz_str = "UTC"
+        # No explicit/recognised timezone — never invent one.  A zone like "WAT" or
+        # "EST" must not silently become UTC.
+        return None, None
     return naive.replace(tzinfo=tz).astimezone(UTC), tz_str
 
 
